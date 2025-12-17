@@ -1,0 +1,69 @@
+[
+    {
+        "id": "prod-1",
+        "name": "Heritage Gold Necklace",
+        "image": "/varaha-assets/necklace1.jpg",
+        "price": 45000,
+        "category": "Necklaces",
+        "metal": "Gold",
+        "carat": "22k",
+        "stones": [
+            "Ruby",
+            "Emerald"
+        ],
+        "polish": "Antique",
+        "premium": true,
+        "tag": "Best Seller",
+        "style": "Traditional",
+        "description": "An exquisite antique gold necklace with ruby and emerald embellishments."
+    },
+    {
+        "id": "prod-2",
+        "name": "Diamond Stud Earrings",
+        "image": "/varaha-assets/earrings1.jpg",
+        "price": 15000,
+        "category": "Earrings",
+        "metal": "Gold",
+        "carat": "18k",
+        "stones": [
+            "Diamond"
+        ],
+        "polish": "High Polish",
+        "premium": false,
+        "tag": "New",
+        "style": "Modern",
+        "description": "Classic diamond studs suitable for everyday elegance."
+    },
+    {
+        "id": "prod-3",
+        "name": "Temple Jewellery Bangle",
+        "image": "/varaha-assets/bangle1.jpg",
+        "price": 28000,
+        "category": "Bangles",
+        "metal": "Gold",
+        "carat": "22k",
+        "stones": [],
+        "polish": "Matte",
+        "premium": true,
+        "tag": "Trending",
+        "style": "Temple",
+        "description": "Intricate temple design bangle crafted with precision."
+    },
+    {
+        "id": "prod-4",
+        "name": "Silver Oxidized Ring",
+        "image": "/varaha-assets/ring1.jpg",
+        "price": 2500,
+        "category": "Rings",
+        "metal": "Silver",
+        "carat": "925",
+        "stones": [
+            "Onyx"
+        ],
+        "polish": "Oxidized",
+        "premium": false,
+        "tag": "Sale",
+        "style": "Boho",
+        "description": "Statement silver ring with black onyx stone."
+    }
+]
