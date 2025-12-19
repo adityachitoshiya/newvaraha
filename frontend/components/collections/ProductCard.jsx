@@ -145,14 +145,34 @@ export default function ProductCard({ product, onQuickLook }) {
 
         {/* Product Image Container */}
         <div className="relative aspect-[3/4] overflow-hidden bg-gradient-to-br from-warm-sand/30 to-ivory/50">
+          {/* Primary Image */}
           <Image
             src={product.image}
             alt={product.name}
             fill
-            className={`object-cover transition-all duration-700 ${isHovered ? 'scale-110' : 'scale-100'
-              }`}
+            className={`object-cover transition-all duration-700 ${
+              isHovered ? 'scale-110 opacity-0' : 'scale-100 opacity-100'
+            }`}
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+            priority={false}
           />
+
+          {/* Secondary Image (shows on hover) */}
+          {product.additional_images && product.additional_images.length > 0 && (
+            <Image
+              src={typeof product.additional_images === 'string' 
+                ? JSON.parse(product.additional_images)[0] 
+                : product.additional_images[0]
+              }
+              alt={`${product.name} - view 2`}
+              fill
+              className={`object-cover transition-all duration-700 ${
+                isHovered ? 'scale-100 opacity-100' : 'scale-110 opacity-0'
+              }`}
+              sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+              priority={false}
+            />
+          )}
 
           {/* Hover Overlay - Desktop */}
           <div className={`

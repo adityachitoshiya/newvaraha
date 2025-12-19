@@ -38,13 +38,39 @@ export default function ProductPage() {
         const data = await res.json();
 
         // Adapt backend data to frontend structure
+        // Parse additional images from JSON string
+        let additionalImages = [];
+        try {
+          additionalImages = data.additional_images ? JSON.parse(data.additional_images) : [];
+        } catch (e) {
+          console.error("Error parsing additional_images:", e);
+          additionalImages = [];
+        }
+
+        // Build complete images array: main image first, then additional images
+        const allImages = [
+          { id: 1, type: 'image', url: data.image, alt: data.name }
+        ];
+
+        // Add additional images with sequential IDs
+        additionalImages.forEach((imageUrl, index) => {
+          if (imageUrl && imageUrl.trim()) {
+            allImages.push({
+              id: index + 2,
+              type: 'image',
+              url: imageUrl,
+              alt: `${data.name} - Image ${index + 2}`
+            });
+          }
+        });
+
         const adaptedProduct = {
           id: data.id,
           title: data.name,
           name: data.name, // Support both naming conventions
           description: data.description,
           price: data.price,
-          images: [{ id: 1, url: data.image, alt: data.name }], // Single image from backend
+          images: allImages, // Complete image array with main + additional images
           category: data.category,
           rating: 4.8, // Mocked
           reviewCount: 124, // Mocked

@@ -8,8 +8,6 @@ import Script from 'next/script'; // Import Script for Razorpay
 import Header from '../components/Header';
 import Footer from '../components/Footer';
 import { ShoppingBag, ArrowLeft, Lock, CreditCard, Truck, Check, Tag } from 'lucide-react';
-import { db } from '../lib/firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 export default function Checkout() {
   const router = useRouter();
@@ -172,31 +170,8 @@ export default function Checkout() {
 
   // Handle Razorpay Payment Success
   const handleRazorpaySuccess = async (response) => {
-    // Backup to Firebase
-    try {
-      await addDoc(collection(db, "orders"), {
-        orderId: response.razorpay_order_id,
-        paymentId: response.razorpay_payment_id,
-        amount: finalAmount,
-        customer: {
-          name: formData.name,
-          email: formData.email,
-          contact: formData.contact,
-          address: formData.address,
-          city: formData.city,
-          state: formData.state,
-          pincode: formData.pincode
-        },
-        items: cartItems.length > 0 ? cartItems : (orderDetails ? [orderDetails] : []),
-        paymentMethod: 'online',
-        status: 'paid', // Assuming success if we are here
-        createdAt: serverTimestamp()
-      });
-    } catch (e) {
-      console.error("Firebase Order Backup Failed:", e);
-    }
-
-    // In a real app, verify signature on backend
+    // Order is already saved in backend through Razorpay webhook/callback
+    // Just redirect to success page
     router.push({
       pathname: '/payment-success',
       query: {
@@ -265,40 +240,30 @@ export default function Checkout() {
     if (paymentMethod === 'cod') {
       try {
         const API_URL = getApiUrl();
+        const token = localStorage.getItem('customer_token') || localStorage.getItem('token');
+        if (!token) {
+          setError('Please login to place an order');
+          setIsLoading(false);
+          // Optionally redirect to login
+          // router.push('/login?redirect=/checkout');
+          return;
+        }
+
         const response = await fetch(`${API_URL}/api/create-cod-order`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
           body: JSON.stringify({ ...orderData, codCharges: COD_CHARGE })
         });
         const data = await response.json();
         if (response.ok) {
-          // Backup COD Order to Firebase
-          try {
-            await addDoc(collection(db, "orders"), {
-              orderId: data.orderId,
-              amount: finalAmount,
-              customer: {
-                name: formData.name,
-                email: formData.email,
-                contact: formData.contact,
-                address: formData.address,
-                city: formData.city,
-                state: formData.state,
-                pincode: formData.pincode
-              },
-              items: cartItems.length > 0 ? cartItems : (orderDetails ? [orderDetails] : []),
-              paymentMethod: 'cod',
-              status: 'pending',
-              createdAt: serverTimestamp()
-            });
-          } catch (e) {
-            console.error("Firebase COD Order Backup Failed:", e);
-          }
-
+          // Order saved to Supabase backend successfully
           if (cartItems.length > 0) localStorage.removeItem('cart');
           router.push({
             pathname: '/payment-success',
-            query: { orderId: data.orderId, amount: finalAmount, codMode: 'true', email: formData.email, name: formData.name } // data.orderId is the ORD-... string
+            query: { orderId: data.orderId, amount: finalAmount, codMode: 'true', email: formData.email, name: formData.name }
           });
         } else {
           throw new Error(data.detail || 'Failed to place order');
@@ -312,9 +277,19 @@ export default function Checkout() {
 
     // Online Payment (Razorpay)
     try {
+      const token = localStorage.getItem('customer_token') || localStorage.getItem('token');
+      if (!token) {
+        setError('Please login to place an order');
+        setIsLoading(false);
+        return;
+      }
+
       const response = await fetch(`${getApiUrl()}/api/create-checkout-session`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify(orderData)
       });
       const data = await response.json();

@@ -6,11 +6,15 @@ load_dotenv(dotenv_path=env_path)
 from fastapi import FastAPI, Depends, HTTPException, Query, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from database import create_db_and_tables, get_session
-from models import Product, Order, AdminUser, PaymentGateway, Notification, Customer, Review, Coupon, VisitorLog, ActiveVisitor, HeroSlide, CreatorVideo, StoreSettings, Cart, CartItem
+from models import (
+    Product, Order, AdminUser, PaymentGateway, Notification, Customer, Review, 
+    Coupon, VisitorLog, ActiveVisitor, HeroSlide, CreatorVideo, StoreSettings, 
+    Cart, CartItem, Wishlist, Address, ProductVariant, Inventory, OrderReturn
+)
 from notifications import send_order_notifications
 from rapidshyp_utils import create_rapidshyp_order
 from auth_utils import verify_password, create_access_token
-from sqlmodel import Session, select, func, col
+from sqlmodel import Session, select, func, col, or_
 
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
@@ -21,6 +25,7 @@ import time
 import json
 import traceback
 import hashlib
+import uuid
 from fastapi import UploadFile, File
 from supabase_utils import upload_file_to_supabase
 
@@ -86,19 +91,34 @@ async def get_current_user(token: str = Depends(oauth2_scheme), session: Session
             user_data = s_client.auth.get_user(token)
             if user_data and user_data.user:
                 email = user_data.user.email
-                # Ensure user exists in local DB
-                user = session.exec(select(Customer).where(Customer.email == email)).first()
+                uid = user_data.user.id
+                
+                # 1. Try finding by UID (Strict)
+                user = session.exec(select(Customer).where(Customer.supabase_uid == uid)).first()
+                
                 if not user:
-                    # Auto-create synced user
-                    user = Customer(
-                        full_name=user_data.user.user_metadata.get('full_name', email.split('@')[0]),
-                        email=email,
-                        provider="google",
-                        is_active=True
-                    )
-                    session.add(user)
-                    session.commit()
-                    session.refresh(user)
+                     # 2. Fallback: Try finding by Email (Migration)
+                     user = session.exec(select(Customer).where(Customer.email == email)).first()
+                     
+                     if user:
+                         # Found by email but no UID? Link them now!
+                         if not user.supabase_uid:
+                             user.supabase_uid = uid
+                             session.add(user)
+                             session.commit()
+                             session.refresh(user)
+                     else:
+                        # 3. Create new user with UID
+                        user = Customer(
+                            full_name=user_data.user.user_metadata.get('full_name', email.split('@')[0]),
+                            email=email,
+                            provider="google",
+                            supabase_uid=uid,
+                            is_active=True
+                        )
+                        session.add(user)
+                        session.commit()
+                        session.refresh(user)
                 return user
     except Exception as e:
         print(f"Token verification failed: {e}")
@@ -302,9 +322,16 @@ def customer_login(login_data: CustomerLogin, session: Session = Depends(get_ses
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
     # Create simple JWT for customer
-    # Note: We reuse create_access_token but with different subject/scopes if needed
-    token = create_access_token(data={"sub": customer.email, "role": "customer", "name": customer.full_name})
-    return {"access_token": token, "token_type": "bearer", "user": {"name": customer.full_name, "email": customer.email}}
+    token = create_access_token(data={"sub": customer.email, "role": "customer", "name": customer.full_name, "customer_id": customer.id})
+    return {
+        "access_token": token, 
+        "token_type": "bearer", 
+        "user": {
+            "id": customer.id,
+            "name": customer.full_name, 
+            "email": customer.email
+        }
+    }
 
 class UserSync(BaseModel):
     full_name: str
@@ -316,18 +343,46 @@ def sync_user(user_data: UserSync, token: str = Depends(oauth2_scheme), session:
     # 1. Verify Token (Double check if needed, but frontend sends one)
     # For now, trust the token as it comes from Supabase client login
     
-    customer = session.exec(select(Customer).where(Customer.email == user_data.email)).first()
+    # 1. Verify Token with Supabase to get trusted UID
+    from supabase_utils import init_supabase
+    s_client = init_supabase()
+    uid = None
+    
+    if s_client:
+        try:
+            u_data = s_client.auth.get_user(token)
+            if u_data and u_data.user:
+                uid = u_data.user.id
+        except:
+             pass
+    
+    # Logic: Find by UID -> Find by Email -> Create
+    customer = None
+    if uid:
+        customer = session.exec(select(Customer).where(Customer.supabase_uid == uid)).first()
+        
     if not customer:
-        # Create new customer
-        customer = Customer(
-            full_name=user_data.full_name,
-            email=user_data.email,
-            provider=user_data.provider,
-            is_active=True
-        )
-        session.add(customer)
-        session.commit()
-        session.refresh(customer)
+        customer = session.exec(select(Customer).where(Customer.email == user_data.email)).first()
+        
+        if customer:
+            # Link UID if missing
+            if uid and not customer.supabase_uid:
+                customer.supabase_uid = uid
+                session.add(customer)
+                session.commit()
+                session.refresh(customer)
+        else:
+            # Create new customer
+            customer = Customer(
+                full_name=user_data.full_name,
+                email=user_data.email,
+                provider=user_data.provider,
+                supabase_uid=uid, # Can be None if token invalid, but we should enforce it?
+                is_active=True
+            )
+            session.add(customer)
+            session.commit()
+            session.refresh(customer)
     
     return {"ok": True, "customer_id": customer.id}
 
@@ -351,6 +406,37 @@ def social_login(social_data: SocialLogin, session: Session = Depends(get_sessio
     token = create_access_token(data={"sub": customer.email, "role": "customer", "name": customer.full_name})
     return {"access_token": token, "token_type": "bearer", "user": {"name": customer.full_name, "email": customer.email}}
 
+
+# --- Helper Functions ---
+def update_product_rating(product_id: str, session: Session):
+    """Update product rating aggregation after review changes"""
+    reviews = session.exec(
+        select(Review).where(Review.product_id == product_id)
+    ).all()
+    
+    product = session.get(Product, product_id)
+    if not product:
+        return
+    
+    if not reviews:
+        product.average_rating = None
+        product.total_reviews = 0
+        product.rating_distribution = "{}"
+    else:
+        # Calculate average
+        total_rating = sum(r.rating for r in reviews)
+        product.average_rating = round(total_rating / len(reviews), 1)
+        product.total_reviews = len(reviews)
+        
+        # Calculate distribution
+        distribution = {"5": 0, "4": 0, "3": 0, "2": 0, "1": 0}
+        for review in reviews:
+            distribution[str(review.rating)] += 1
+        
+        product.rating_distribution = json.dumps(distribution)
+    
+    session.add(product)
+    session.commit()
 
 # --- Product Routes ---
 @app.get("/api/products", response_model=List[Product])
@@ -388,6 +474,10 @@ def create_review(review_data: ReviewCreate, session: Session = Depends(get_sess
         )
         session.add(new_review)
         session.commit()
+        
+        # Update product rating aggregation
+        update_product_rating(review_data.product_id, session)
+        
         return {"ok": True, "message": "Review submitted successfully"}
     except Exception as e:
         print(f"Error creating review: {e}")
@@ -407,6 +497,14 @@ def get_reviews(product_id: str, session: Session = Depends(get_session)):
 
 @app.post("/api/products", response_model=Product)
 def create_product(product: Product, token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+    # Ensure rating fields have default values
+    if not hasattr(product, 'average_rating') or product.average_rating is None:
+        product.average_rating = None
+    if not hasattr(product, 'total_reviews'):
+        product.total_reviews = 0
+    if not hasattr(product, 'rating_distribution') or not product.rating_distribution:
+        product.rating_distribution = "{}"
+    
     session.add(product)
     session.commit()
     session.refresh(product)
@@ -441,8 +539,14 @@ def delete_review(review_id: int, token: str = Depends(oauth2_scheme), session: 
     review = session.get(Review, review_id)
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
+    
+    product_id = review.product_id
     session.delete(review)
     session.commit()
+    
+    # Update product rating after deletion
+    update_product_rating(product_id, session)
+    
     return {"ok": True}
 
 # --- Order Routes ---
@@ -463,40 +567,39 @@ def read_orders(session: Session = Depends(get_session)):
 
 @app.get("/api/customer/orders", response_model=List[Order])
 def read_my_orders(token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
-    email = None
+    user_id = None
     
-    # 1. Try Local Token
+    # Get user_id from Supabase Token (ONLY way to identify user)
     try:
-        from auth_utils import ALGORITHM, SECRET_KEY
-        from jose import jwt
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email = payload.get("sub")
-        print(f"DEBUG: Decoded Local Token. Email: {email}") # DEBUG LOG
+        from supabase_utils import init_supabase
+        s_client = init_supabase()
+        if s_client:
+            user_data = s_client.auth.get_user(token)
+            if user_data and user_data.user:
+                user_id = user_data.user.id  # UUID string
+                print(f"DEBUG: Supabase User UUID: {user_id}")
     except Exception as e:
-        print(f"DEBUG: Local Token failed: {e}") # DEBUG LOG
-        pass
-
-    # 2. Try Supabase Token (if local failed)
-    if not email:
-        try:
-            from supabase_utils import init_supabase
-            s_client = init_supabase()
-            if s_client:
-                 user_data = s_client.auth.get_user(token)
-                 if user_data and user_data.user:
-                     email = user_data.user.email
-                     print(f"DEBUG: Decoded Supabase Token. Email: {email}") # DEBUG LOG
-        except Exception as e:
-            print(f"DEBUG: Supabase Token failed: {e}") # DEBUG LOG
-            pass
+        print(f"DEBUG: Supabase token check failed: {e}")
             
-    if not email:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired token. Please login again.")
 
-    # 2. Fetch Orders filtering by email
-    # Case-insensitive match is safer, but strictly we use the saved email
-    orders = session.exec(select(Order).where(Order.email == email).order_by(Order.created_at.desc())).all()
-    print(f"DEBUG: Found {len(orders)} orders for {email}") # DEBUG LOG
+    # Fetch Orders ONLY by user_id (UUID) - Strict user isolation
+    orders = []
+    
+    print(f"DEBUG: Fetching orders ONLY for User UUID: {user_id}")
+    try:
+        orders = session.exec(
+            select(Order)
+            .where(Order.user_id == uuid.UUID(user_id))
+            .order_by(Order.created_at.desc())
+        ).all()
+        print(f"DEBUG: Found {len(orders)} orders for this user")
+    except Exception as e:
+        print(f"DEBUG: UUID query error: {e}")
+        orders = []
+
+    # NO EMAIL FALLBACK - Each user sees ONLY their own orders
     return orders
 
 @app.get("/api/orders/{order_id}", response_model=Order)
@@ -635,7 +738,25 @@ class OrderCreate(BaseModel):
     isCartCheckout: Optional[bool] = False
 
 @app.post("/api/create-cod-order")
-def create_cod_order(order_data: OrderCreate, session: Session = Depends(get_session)):
+def create_cod_order(order_data: OrderCreate, token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+    # Extract User ID from Supabase Token
+    user_id = None
+    user_email = None
+    
+    try:
+        from supabase_utils import init_supabase
+        s_client = init_supabase()
+        if s_client:
+            user_data_sb = s_client.auth.get_user(token)
+            if user_data_sb and user_data_sb.user:
+                user_id = user_data_sb.user.id  # This is the UUID
+                user_email = user_data_sb.user.email
+                print(f"DEBUG: Creating order for User UUID: {user_id}, Email: {user_email}")
+    except Exception as e:
+        print(f"DEBUG: Supabase Token Check Failed: {e}")
+        # Allow order creation without user_id for guest checkout
+        pass
+
     try:
         # Create Items JSON
         if order_data.isCartCheckout and order_data.items:
@@ -659,26 +780,32 @@ def create_cod_order(order_data: OrderCreate, session: Session = Depends(get_ses
                 "variant": order_data.variantId
             }])
 
+        # Generate a unique order_id string
+        order_id_str = f"ORD-{int(time.time())}"
+
         new_order = Order(
-            order_id=f"ORD-{int(time.time())}", # Use order_id for the string ID
+            order_id=order_id_str,
             customer_name=order_data.name,
             email=order_data.email,
             phone=order_data.contact,
             address=order_data.address,
             city=order_data.city,
             pincode=order_data.pincode,
+            total_amount=order_data.amount + (order_data.codCharges or 0), # Keep original total_amount calculation
+            status="Pending", # Keep original status casing
+            payment_method=order_data.paymentMethod,
             items_json=items_json,
-             total_amount=order_data.amount + (order_data.codCharges or 0),
-            status="Pending",
             status_history=json.dumps([{
-                "status": "Pending",
+                "status": "Pending", # Keep original status casing
                 "timestamp": datetime.utcnow().isoformat(),
                 "comment": "Order placed successfully"
             }]),
             payment_status="Pending",
-            payment_method="COD",
-            created_at=datetime.utcnow()
+            created_at=datetime.utcnow(),
+            user_id=uuid.UUID(user_id) if user_id else None  # Convert string UUID to UUID object
         )
+        
+        print(f"DEBUG: Order created with user_id: {new_order.user_id}")
         
         session.add(new_order)
         
@@ -689,8 +816,6 @@ def create_cod_order(order_data: OrderCreate, session: Session = Depends(get_ses
             is_read=False,
             created_at=datetime.utcnow()
         )
-        session.add(new_notification)
-
         session.add(new_notification)
 
         session.commit()
@@ -709,7 +834,20 @@ def create_cod_order(order_data: OrderCreate, session: Session = Depends(get_ses
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/create-checkout-session")
-def create_checkout_session(order_data: OrderCreate, session: Session = Depends(get_session)):
+def create_checkout_session(order_data: OrderCreate, token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+    # Extract User ID from Supabase Token
+    user_id = None
+    try:
+        from supabase_utils import init_supabase
+        s_client = init_supabase()
+        if s_client:
+            user_data_sb = s_client.auth.get_user(token)
+            if user_data_sb and user_data_sb.user:
+                user_id = user_data_sb.user.id
+                print(f"DEBUG: Checkout for User UUID: {user_id}")
+    except Exception as e:
+        print(f"DEBUG: Supabase Token Check Failed in checkout: {e}")
+
     try:
         # 1. Find Active Gateway
         gateway = session.exec(select(PaymentGateway).where(PaymentGateway.is_active == True)).first()
@@ -777,7 +915,8 @@ def create_checkout_session(order_data: OrderCreate, session: Session = Depends(
                     }]),
                     payment_status="Pending",
                     payment_method="Online",
-                    created_at=datetime.utcnow()
+                    created_at=datetime.utcnow(),
+                    user_id=uuid.UUID(user_id) if user_id else None  # User-specific order
                 )
                 session.add(new_order)
                 session.commit()
@@ -1196,3 +1335,780 @@ def update_store_settings(new_settings: StoreSettings, session: Session = Depend
     session.commit()
     session.refresh(settings)
     return settings
+
+
+# ==========================================
+# 🎁 WISHLIST APIs
+# ==========================================
+
+@app.get("/api/wishlist", response_model=List[Dict])
+def get_wishlist(
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Get user's wishlist with product details"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    customer_id = current_user.id
+    wishlist_items = session.exec(
+        select(Wishlist).where(Wishlist.customer_id == customer_id)
+    ).all()
+    
+    # Fetch product details
+    result = []
+    for item in wishlist_items:
+        product = session.get(Product, item.product_id)
+        if product:
+            result.append({
+                "id": item.id,
+                "product_id": item.product_id,
+                "added_at": item.added_at.isoformat(),
+                "product": {
+                    "id": product.id,
+                    "name": product.name,
+                    "price": product.price,
+                    "image": product.image,
+                    "category": product.category,
+                    "metal": product.metal,
+                    "premium": product.premium
+                }
+            })
+    
+    return result
+
+
+@app.post("/api/wishlist")
+def add_to_wishlist(
+    product_id: str,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Add product to wishlist"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    customer_id = current_user.id
+    
+    # Check if product exists
+    product = session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Check if already in wishlist
+    existing = session.exec(
+        select(Wishlist).where(
+            Wishlist.customer_id == customer_id,
+            Wishlist.product_id == product_id
+        )
+    ).first()
+    
+    if existing:
+        return {"message": "Already in wishlist", "id": existing.id}
+    
+    # Add to wishlist
+    wishlist_item = Wishlist(
+        customer_id=customer_id,
+        product_id=product_id
+    )
+    session.add(wishlist_item)
+    session.commit()
+    session.refresh(wishlist_item)
+    
+    return {
+        "message": "Added to wishlist",
+        "id": wishlist_item.id,
+        "product_id": product_id
+    }
+
+
+@app.delete("/api/wishlist/{product_id}")
+def remove_from_wishlist(
+    product_id: str,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Remove product from wishlist"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    customer_id = current_user.id
+    
+    wishlist_item = session.exec(
+        select(Wishlist).where(
+            Wishlist.customer_id == customer_id,
+            Wishlist.product_id == product_id
+        )
+    ).first()
+    
+    if not wishlist_item:
+        raise HTTPException(status_code=404, detail="Item not in wishlist")
+    
+    session.delete(wishlist_item)
+    session.commit()
+    
+    return {"message": "Removed from wishlist"}
+
+
+@app.post("/api/wishlist/sync")
+def sync_wishlist(
+    product_ids: List[str],
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Sync local wishlist to server (merge on login)"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    customer_id = current_user.id
+    added_count = 0
+    
+    for product_id in product_ids:
+        # Check if already exists
+        existing = session.exec(
+            select(Wishlist).where(
+                Wishlist.customer_id == customer_id,
+                Wishlist.product_id == product_id
+            )
+        ).first()
+        
+        if not existing:
+            # Verify product exists
+            product = session.get(Product, product_id)
+            if product:
+                wishlist_item = Wishlist(
+                    customer_id=customer_id,
+                    product_id=product_id
+                )
+                session.add(wishlist_item)
+                added_count += 1
+    
+    session.commit()
+    return {"message": f"Synced {added_count} items to wishlist"}
+
+
+# ==========================================
+# 📍 ADDRESS MANAGEMENT APIs
+# ==========================================
+
+@app.get("/api/addresses", response_model=List[Address])
+def get_addresses(
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Get all addresses for current user"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    addresses = session.exec(
+        select(Address)
+        .where(Address.customer_id == current_user.id)
+        .order_by(Address.is_default.desc(), Address.created_at.desc())
+    ).all()
+    
+    return addresses
+
+
+@app.post("/api/addresses", response_model=Address)
+def add_address(
+    address_data: Address,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Add new address"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # If this is the first address or marked as default, unset other defaults
+    if address_data.is_default:
+        existing_defaults = session.exec(
+            select(Address).where(
+                Address.customer_id == current_user.id,
+                Address.is_default == True
+            )
+        ).all()
+        
+        for addr in existing_defaults:
+            addr.is_default = False
+            session.add(addr)
+    
+    # Create new address
+    new_address = Address(
+        customer_id=current_user.id,
+        label=address_data.label,
+        full_name=address_data.full_name,
+        phone=address_data.phone,
+        address_line1=address_data.address_line1,
+        address_line2=address_data.address_line2,
+        city=address_data.city,
+        state=address_data.state,
+        pincode=address_data.pincode,
+        country=address_data.country or "India",
+        is_default=address_data.is_default,
+        address_type=address_data.address_type or "both"
+    )
+    
+    session.add(new_address)
+    session.commit()
+    session.refresh(new_address)
+    
+    return new_address
+
+
+@app.put("/api/addresses/{address_id}", response_model=Address)
+def update_address(
+    address_id: int,
+    address_data: Address,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Update existing address"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    address = session.get(Address, address_id)
+    if not address or address.customer_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Address not found")
+    
+    # If setting as default, unset others
+    if address_data.is_default and not address.is_default:
+        existing_defaults = session.exec(
+            select(Address).where(
+                Address.customer_id == current_user.id,
+                Address.is_default == True
+            )
+        ).all()
+        
+        for addr in existing_defaults:
+            addr.is_default = False
+            session.add(addr)
+    
+    # Update fields
+    address.label = address_data.label
+    address.full_name = address_data.full_name
+    address.phone = address_data.phone
+    address.address_line1 = address_data.address_line1
+    address.address_line2 = address_data.address_line2
+    address.city = address_data.city
+    address.state = address_data.state
+    address.pincode = address_data.pincode
+    address.country = address_data.country or "India"
+    address.is_default = address_data.is_default
+    address.address_type = address_data.address_type
+    address.updated_at = datetime.utcnow()
+    
+    session.add(address)
+    session.commit()
+    session.refresh(address)
+    
+    return address
+
+
+@app.delete("/api/addresses/{address_id}")
+def delete_address(
+    address_id: int,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Delete address"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    address = session.get(Address, address_id)
+    if not address or address.customer_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Address not found")
+    
+    session.delete(address)
+    session.commit()
+    
+    return {"message": "Address deleted successfully"}
+
+
+@app.put("/api/addresses/{address_id}/default")
+def set_default_address(
+    address_id: int,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Set address as default"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    address = session.get(Address, address_id)
+    if not address or address.customer_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Address not found")
+    
+    # Unset all other defaults
+    existing_defaults = session.exec(
+        select(Address).where(
+            Address.customer_id == current_user.id,
+            Address.is_default == True
+        )
+    ).all()
+    
+    for addr in existing_defaults:
+        addr.is_default = False
+        session.add(addr)
+    
+    # Set this as default
+    address.is_default = True
+    session.add(address)
+    session.commit()
+    session.refresh(address)
+    
+    return address
+
+
+# ==========================================
+# 🎨 PRODUCT VARIANTS & INVENTORY APIs
+# ==========================================
+
+@app.get("/api/products/{product_id}/variants", response_model=List[ProductVariant])
+def get_product_variants(
+    product_id: str,
+    session: Session = Depends(get_session)
+):
+    """Get all variants for a product"""
+    variants = session.exec(
+        select(ProductVariant)
+        .where(ProductVariant.product_id == product_id)
+        .where(ProductVariant.is_available == True)
+    ).all()
+    
+    return variants
+
+
+@app.post("/api/products/{product_id}/variants", response_model=ProductVariant)
+def add_product_variant(
+    product_id: str,
+    variant_data: ProductVariant,
+    session: Session = Depends(get_session)
+):
+    """Add variant to product (Admin only)"""
+    # Verify product exists
+    product = session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Create variant
+    new_variant = ProductVariant(
+        product_id=product_id,
+        sku=variant_data.sku,
+        name=variant_data.name,
+        price=variant_data.price,
+        stock=variant_data.stock,
+        attributes=variant_data.attributes,
+        is_available=variant_data.is_available
+    )
+    
+    session.add(new_variant)
+    session.commit()
+    session.refresh(new_variant)
+    
+    # Create inventory entry
+    inventory = Inventory(
+        variant_id=new_variant.id,
+        stock=new_variant.stock,
+        available=new_variant.stock
+    )
+    session.add(inventory)
+    session.commit()
+    
+    return new_variant
+
+
+@app.put("/api/variants/{variant_id}", response_model=ProductVariant)
+def update_variant(
+    variant_id: int,
+    variant_data: ProductVariant,
+    session: Session = Depends(get_session)
+):
+    """Update product variant (Admin only)"""
+    variant = session.get(ProductVariant, variant_id)
+    if not variant:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    
+    variant.name = variant_data.name
+    variant.sku = variant_data.sku
+    variant.price = variant_data.price
+    variant.stock = variant_data.stock
+    variant.attributes = variant_data.attributes
+    variant.is_available = variant_data.is_available
+    
+    session.add(variant)
+    session.commit()
+    session.refresh(variant)
+    
+    return variant
+
+
+@app.delete("/api/variants/{variant_id}")
+def delete_variant(
+    variant_id: int,
+    session: Session = Depends(get_session)
+):
+    """Delete product variant (Admin only)"""
+    variant = session.get(ProductVariant, variant_id)
+    if not variant:
+        raise HTTPException(status_code=404, detail="Variant not found")
+    
+    session.delete(variant)
+    session.commit()
+    
+    return {"message": "Variant deleted successfully"}
+
+
+@app.get("/api/inventory/{product_id}")
+def get_inventory(
+    product_id: str,
+    session: Session = Depends(get_session)
+):
+    """Get inventory status for product/variants"""
+    # Check product inventory
+    product_inventory = session.exec(
+        select(Inventory).where(Inventory.product_id == product_id)
+    ).first()
+    
+    # Check variant inventories
+    variants = session.exec(
+        select(ProductVariant).where(ProductVariant.product_id == product_id)
+    ).all()
+    
+    variant_inventories = []
+    for variant in variants:
+        inv = session.exec(
+            select(Inventory).where(Inventory.variant_id == variant.id)
+        ).first()
+        if inv:
+            variant_inventories.append({
+                "variant_id": variant.id,
+                "variant_name": variant.name,
+                "sku": variant.sku,
+                "stock": inv.stock,
+                "reserved": inv.reserved,
+                "available": inv.available
+            })
+    
+    return {
+        "product_id": product_id,
+        "product_inventory": {
+            "stock": product_inventory.stock if product_inventory else 0,
+            "available": product_inventory.available if product_inventory else 0
+        },
+        "variants": variant_inventories
+    }
+
+
+# ==========================================
+# 🔄 ORDER RETURN & REFUND APIs
+# ==========================================
+
+@app.post("/api/orders/{order_id}/return", response_model=OrderReturn)
+def create_return_request(
+    order_id: str,
+    return_data: Dict[str, Any],
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Customer creates return request"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Verify order exists and belongs to user
+    order = session.exec(
+        select(Order).where(Order.order_id == order_id)
+    ).first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    if order.user_id != current_user.supabase_uid:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # Check if return already exists
+    existing_return = session.exec(
+        select(OrderReturn).where(OrderReturn.order_id == order_id)
+    ).first()
+    
+    if existing_return:
+        raise HTTPException(status_code=400, detail="Return request already exists")
+    
+    # Create return request
+    return_request = OrderReturn(
+        order_id=order_id,
+        customer_id=current_user.id,
+        reason=return_data.get("reason", ""),
+        description=return_data.get("description"),
+        refund_amount=return_data.get("refund_amount", order.total_amount),
+        refund_method=return_data.get("refund_method", "original"),
+        return_items=json.dumps(return_data.get("items", [])),
+        status="pending"
+    )
+    
+    session.add(return_request)
+    session.commit()
+    session.refresh(return_request)
+    
+    return return_request
+
+
+@app.get("/api/returns", response_model=List[OrderReturn])
+def get_all_returns(
+    status: Optional[str] = None,
+    session: Session = Depends(get_session)
+):
+    """Get all return requests (Admin only)"""
+    query = select(OrderReturn)
+    
+    if status:
+        query = query.where(OrderReturn.status == status)
+    
+    returns = session.exec(query.order_by(OrderReturn.created_at.desc())).all()
+    return returns
+
+
+@app.get("/api/customer/returns", response_model=List[OrderReturn])
+def get_customer_returns(
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Get customer's return requests"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    returns = session.exec(
+        select(OrderReturn)
+        .where(OrderReturn.customer_id == current_user.id)
+        .order_by(OrderReturn.created_at.desc())
+    ).all()
+    
+    return returns
+
+
+@app.put("/api/returns/{return_id}")
+def update_return_status(
+    return_id: int,
+    status_data: Dict[str, Any],
+    session: Session = Depends(get_session)
+):
+    """Update return status (Admin only)"""
+    return_request = session.get(OrderReturn, return_id)
+    if not return_request:
+        raise HTTPException(status_code=404, detail="Return request not found")
+    
+    return_request.status = status_data.get("status", return_request.status)
+    return_request.admin_notes = status_data.get("admin_notes")
+    return_request.tracking_number = status_data.get("tracking_number")
+    
+    if status_data.get("status") in ["approved", "refunded", "rejected"]:
+        return_request.processed_at = datetime.utcnow()
+    
+    session.add(return_request)
+    session.commit()
+    session.refresh(return_request)
+    
+    return return_request
+
+
+@app.post("/api/returns/{return_id}/refund")
+def process_refund(
+    return_id: int,
+    session: Session = Depends(get_session)
+):
+    """Process refund for approved return (Admin only)"""
+    return_request = session.get(OrderReturn, return_id)
+    if not return_request:
+        raise HTTPException(status_code=404, detail="Return request not found")
+    
+    if return_request.status != "approved":
+        raise HTTPException(status_code=400, detail="Return must be approved first")
+    
+    # Update status to refunded
+    return_request.status = "refunded"
+    return_request.processed_at = datetime.utcnow()
+    
+    session.add(return_request)
+    session.commit()
+    
+    # Here you would integrate with payment gateway for actual refund
+    # For now, just return success
+    
+    return {
+        "message": "Refund processed successfully",
+        "refund_amount": return_request.refund_amount,
+        "order_id": return_request.order_id
+    }
+
+
+# ==========================================
+# 🔍 ENHANCED SEARCH & FILTER APIs
+# ==========================================
+
+@app.get("/api/products/search")
+def search_products(
+    q: str = Query("", description="Search query"),
+    category: Optional[str] = None,
+    metal: Optional[str] = None,
+    style: Optional[str] = None,
+    tag: Optional[str] = None,
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    sort: str = "relevance",  # relevance, price_asc, price_desc, newest
+    limit: int = 50,
+    offset: int = 0,
+    session: Session = Depends(get_session)
+):
+    """Advanced product search with filters and sorting"""
+    
+    # Build base query
+    query = select(Product)
+    
+    # Text search (name or description)
+    if q:
+        query = query.where(
+            or_(
+                Product.name.ilike(f"%{q}%"),
+                Product.description.ilike(f"%{q}%")
+            )
+        )
+    
+    # Category filter
+    if category:
+        query = query.where(Product.category == category)
+    
+    # Metal filter
+    if metal:
+        query = query.where(Product.metal == metal)
+    
+    # Style filter
+    if style:
+        query = query.where(Product.style == style)
+    
+    # Tag filter
+    if tag:
+        query = query.where(Product.tag == tag)
+    
+    # Price range filter
+    if min_price is not None:
+        query = query.where(Product.price >= min_price)
+    
+    if max_price is not None:
+        query = query.where(Product.price <= max_price)
+    
+    # Sorting
+    if sort == "price_asc":
+        query = query.order_by(Product.price.asc())
+    elif sort == "price_desc":
+        query = query.order_by(Product.price.desc())
+    elif sort == "newest":
+        query = query.order_by(Product.id.desc())
+    # relevance is default (no specific ordering)
+    
+    # Pagination
+    query = query.offset(offset).limit(limit)
+    
+    products = session.exec(query).all()
+    
+    return {
+        "results": products,
+        "count": len(products),
+        "query": q,
+        "filters": {
+            "category": category,
+            "metal": metal,
+            "style": style,
+            "tag": tag,
+            "price_range": [min_price, max_price]
+        }
+    }
+
+
+@app.get("/api/products/suggestions")
+def get_search_suggestions(
+    q: str = Query("", min_length=2),
+    limit: int = 10,
+    session: Session = Depends(get_session)
+):
+    """Get search suggestions/autocomplete"""
+    if not q:
+        return {"suggestions": []}
+    
+    # Search in product names
+    products = session.exec(
+        select(Product.name, Product.id)
+        .where(Product.name.ilike(f"%{q}%"))
+        .limit(limit)
+    ).all()
+    
+    suggestions = [{"name": p[0], "id": p[1]} for p in products]
+    
+    return {"suggestions": suggestions}
+
+
+# ==========================================
+# ⭐ RATING AGGREGATION APIs
+# ==========================================
+
+@app.get("/api/products/{product_id}/rating-summary")
+def get_product_rating_summary(
+    product_id: str,
+    session: Session = Depends(get_session)
+):
+    """Get rating summary and distribution for product"""
+    
+    # Get all reviews for product
+    reviews = session.exec(
+        select(Review).where(Review.product_id == product_id)
+    ).all()
+    
+    if not reviews:
+        return {
+            "average_rating": 0,
+            "total_reviews": 0,
+            "distribution": {"5": 0, "4": 0, "3": 0, "2": 0, "1": 0}
+        }
+    
+    # Calculate average
+    total_rating = sum(r.rating for r in reviews)
+    average_rating = round(total_rating / len(reviews), 1)
+    
+    # Calculate distribution
+    distribution = {"5": 0, "4": 0, "3": 0, "2": 0, "1": 0}
+    for review in reviews:
+        distribution[str(review.rating)] += 1
+    
+    return {
+        "average_rating": average_rating,
+        "total_reviews": len(reviews),
+        "distribution": distribution,
+        "rating_percentages": {
+            "5": round((distribution["5"] / len(reviews)) * 100, 1),
+            "4": round((distribution["4"] / len(reviews)) * 100, 1),
+            "3": round((distribution["3"] / len(reviews)) * 100, 1),
+            "2": round((distribution["2"] / len(reviews)) * 100, 1),
+            "1": round((distribution["1"] / len(reviews)) * 100, 1),
+        }
+    }
+
+
+@app.post("/api/reviews/{review_id}/helpful")
+def mark_review_helpful(
+    review_id: int,
+    session: Session = Depends(get_session)
+):
+    """Mark review as helpful (upvote)"""
+    review = session.get(Review, review_id)
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+    
+    # Increment helpful count
+    review.helpful_count += 1
+    session.add(review)
+    session.commit()
+    session.refresh(review)
+    
+    return {
+        "message": "Marked as helpful",
+        "review_id": review_id,
+        "helpful_count": review.helpful_count
+    }

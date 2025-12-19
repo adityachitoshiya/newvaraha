@@ -7,7 +7,6 @@ export default function Document() {
         {/* Primary Meta Tags */}
         <meta charSet="utf-8" />
         <meta name="theme-color" content="#A3562A" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
 
         {/* SEO Meta Tags */}
         <meta name="description" content="Varaha Jewels - Premium Indian jewelry store offering exquisite heritage collections, bridal jewelry, gold ornaments, and traditional designs. Shop authentic jewelry online with certified quality." />

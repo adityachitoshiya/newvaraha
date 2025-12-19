@@ -27,6 +27,26 @@ connect_args = {}
 if "sqlite" in database_url:
     connect_args["check_same_thread"] = False
 
+# Mask password for logging
+masked_url = database_url
+if ":" in database_url and "@" in database_url:
+    # Basic masking logic
+    try:
+        prefix, rest = database_url.split("://")
+        auth, host_port_db = rest.split("@")
+        user, _ = auth.split(":")
+        masked_url = f"{prefix}://{user}:****@{host_port_db}"
+    except:
+        pass
+
+print(f"🔌 Database Connection: {masked_url}")
+
+if "sqlite" in database_url:
+    print("⚠️  WARNING: Using local SQLite database. Data will NOT be synced to Supabase.")
+    connect_args["check_same_thread"] = False
+else:
+    print("✅ Using Remote Database (Supabase/PostgreSQL)")
+
 engine = create_engine(database_url, echo=True, connect_args=connect_args)
 
 def create_db_and_tables():

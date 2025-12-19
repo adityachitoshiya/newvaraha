@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import Head from 'next/head';
 import { getApiUrl } from '../lib/config';
 import '../styles/globals.css';
 import CookieConsent from '../components/CookieConsent';
@@ -37,17 +38,29 @@ function MyApp({ Component, pageProps }) {
   }, [router.asPath]);
 
   if (isAdmin) {
-    return <Component {...pageProps} />;
+    return (
+      <>
+        <Head>
+          <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
+        </Head>
+        <Component {...pageProps} />
+      </>
+    );
   }
 
   return (
-    <CartProvider>
-      {isHomePage && <DeliveryBar variant="desktop" />}
-      {!isHomePage && <AnnouncementBar />}
-      <Component {...pageProps} />
-      <CookieConsent />
-      <SpinWheelPopup />
-    </CartProvider>
+    <>
+      <Head>
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
+      </Head>
+      <CartProvider>
+        {isHomePage && <DeliveryBar variant="desktop" />}
+        {!isHomePage && <AnnouncementBar />}
+        <Component {...pageProps} />
+        <CookieConsent />
+        <SpinWheelPopup />
+      </CartProvider>
+    </>
   );
 }
 

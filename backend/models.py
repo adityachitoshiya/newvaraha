@@ -18,6 +18,9 @@ class ProductBase(SQLModel):
     style: Optional[str] = None
     image: str
     additional_images: str = "[]" # JSON string of list of URLs
+    average_rating: Optional[float] = None  # Calculated average rating
+    total_reviews: int = 0  # Total number of reviews
+    rating_distribution: str = "{}"  # JSON: {"5": 10, "4": 5, "3": 2, "2": 1, "1": 0}
 
 class Product(ProductBase, table=True):
     id: Optional[str] = Field(default=None, primary_key=True)
@@ -36,12 +39,15 @@ class OrderBase(SQLModel):
     items_json: str
     status_history: str = "[]" # JSON string of list of objects {status, timestamp, comment}
 
+import uuid
+
 class Order(OrderBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     order_id: str = Field(index=True, unique=True)
     shipping_id: Optional[str] = None # RapidShyp Order ID
     awb_number: Optional[str] = None
     courier_name: Optional[str] = None
+    user_id: Optional[uuid.UUID] = Field(default=None, index=True)
 
 class AdminUser(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -72,6 +78,7 @@ class Customer(SQLModel, table=True):
     email: str = Field(index=True, unique=True)
     hashed_password: Optional[str] = None # Nullable for social login
     provider: str = "email" # email, google, facebook
+    supabase_uid: Optional[str] = Field(default=None, index=True, unique=True) # Link to Supabase Auth UUID
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -82,6 +89,8 @@ class Review(SQLModel, table=True):
     rating: int
     comment: str
     media_urls: str = "[]" # JSON string of list of URLs
+    helpful_count: int = 0  # Number of users who found this helpful
+    verified_purchase: bool = False  # Whether reviewer bought the product
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class Coupon(SQLModel, table=True):
@@ -151,3 +160,67 @@ class CartItem(SQLModel, table=True):
     quantity: int = 1
     variant_sku: Optional[str] = None # For future proofing if variants are added
     added_at: datetime = Field(default_factory=datetime.utcnow)
+
+# Wishlist Model
+class Wishlist(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    customer_id: int = Field(foreign_key="customer.id", index=True)
+    product_id: str = Field(foreign_key="product.id", index=True)
+    added_at: datetime = Field(default_factory=datetime.utcnow)
+
+# Address Management Model
+class Address(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    customer_id: int = Field(foreign_key="customer.id", index=True)
+    label: str  # "Home", "Office", "Other"
+    full_name: str
+    phone: str
+    address_line1: str
+    address_line2: Optional[str] = None
+    city: str
+    state: str
+    pincode: str
+    country: str = "India"
+    is_default: bool = False
+    address_type: str = "both"  # "shipping", "billing", "both"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+# Product Variant Model
+class ProductVariant(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    product_id: str = Field(foreign_key="product.id", index=True)
+    sku: str = Field(unique=True, index=True)
+    name: str  # e.g., "18K Gold - Ring Size 7"
+    price: Optional[float] = None  # If None, use product price
+    stock: int = 0
+    attributes: str = "{}"  # JSON: {"size": "7", "metal": "18K Gold", "weight": "5g"}
+    is_available: bool = True
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+# Inventory Tracking Model
+class Inventory(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    variant_id: Optional[int] = Field(default=None, foreign_key="productvariant.id", index=True)
+    product_id: Optional[str] = Field(default=None, foreign_key="product.id", index=True)  # For products without variants
+    stock: int = 0
+    reserved: int = 0  # Items in cart but not ordered
+    available: int = 0  # stock - reserved
+    low_stock_threshold: int = 5
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+# Order Return/Refund Model
+class OrderReturn(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    order_id: str = Field(foreign_key="order.order_id", index=True)
+    customer_id: int = Field(foreign_key="customer.id", index=True)
+    reason: str
+    description: Optional[str] = None
+    status: str = "pending"  # pending, approved, rejected, refunded, cancelled
+    refund_amount: float
+    refund_method: str = "original"  # original, wallet, bank
+    return_items: str = "[]"  # JSON list of items being returned
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    processed_at: Optional[datetime] = None
+    admin_notes: Optional[str] = None
+    tracking_number: Optional[str] = None  # For return shipment

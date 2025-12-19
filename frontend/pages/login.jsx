@@ -3,12 +3,12 @@ import Link from 'next/link';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { getApiUrl } from '../lib/config';
-import { Mail, Lock, AlertCircle, ArrowRight, Loader2, Facebook } from 'lucide-react';
+import { Mail, Lock, AlertCircle, ArrowRight, Loader2, Facebook, CheckCircle } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 
 export default function Login() {
     const router = useRouter();
-    const { registered } = router.query;
+    const { registered, check_email } = router.query;
     const [formData, setFormData] = useState({
         email: '',
         password: ''
@@ -21,6 +21,9 @@ export default function Login() {
     useEffect(() => {
         if (registered) {
             setSuccessMsg("Account created successfully! Please sign in.");
+        }
+        if (check_email) {
+            setSuccessMsg("Account created! Please check your email to verify your account, then sign in.");
         }
 
         const handleSession = (session) => {
@@ -39,6 +42,16 @@ export default function Login() {
 
         // Only auto-login if returning from OAuth (hash present)
         if (typeof window !== 'undefined') {
+            // Check if already logged in (for manual users)
+            const existingToken = localStorage.getItem('customer_token');
+            const existingUser = localStorage.getItem('customer_user');
+            
+            // If user is already logged in and not coming from OAuth redirect, go to home
+            if (existingToken && existingUser && !window.location.hash?.includes('access_token')) {
+                router.push('/');
+                return;
+            }
+            
             if (window.location.hash && window.location.hash.includes('access_token')) {
                 supabase.auth.getSession().then(({ data: { session } }) => {
                     if (session) handleSession(session);
@@ -56,14 +69,6 @@ export default function Login() {
                         authListener.subscription.unsubscribe();
                     }
                 };
-            } else {
-                // Otherwise, CLEAR existing session to ensure manual login (User request: "remove auto login system")
-                const clearSession = async () => {
-                    await supabase.auth.signOut();
-                    localStorage.removeItem('customer_token');
-                    localStorage.removeItem('customer_user');
-                };
-                clearSession();
             }
         }
     }, [registered, router]);
@@ -76,69 +81,18 @@ export default function Login() {
     const handleLogin = async (e) => {
         e.preventDefault();
         setLoading(true);
+        setError(null);
         const API_URL = getApiUrl();
 
         try {
-            // 1. Authenticate with Supabase
+            // Step 1: Login with Supabase (all user data is in Supabase)
             const { data, error: authError } = await supabase.auth.signInWithPassword({
                 email: formData.email,
                 password: formData.password
             });
 
-            if (authError) throw authError;
-
-            if (data?.session) {
-                // 2. Sync with Backend to ensure Customer record exists
-                // We'll use a new/reused endpoint that accepts the token and syncs the user
-                const res = await fetch(`${API_URL}/api/auth/sync`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${data.session.access_token}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        full_name: data.user.user_metadata.full_name || data.user.email.split('@')[0],
-                        email: data.user.email,
-                        provider: 'email'
-                    })
-                });
-
-                if (res.ok) {
-                    const backendData = await res.json();
-                    // Success: Store tokens
-                    localStorage.setItem('customer_token', data.session.access_token);
-                    // Merge Supabase user data with any backend extras if needed, or just use Supabase's
-                    const userData = {
-                        id: data.user.id,
-                        full_name: data.user.user_metadata.full_name || data.user.email.split('@')[0],
-                        email: data.user.email,
-                        role: 'customer'
-                    };
-                    localStorage.setItem('customer_user', JSON.stringify(userData));
-                    router.push('/');
-                } else {
-                    // Check if it's an admin login fallback?
-                    // If Supabase succeeds but backend fails, it might be a connection issue.
-                    // But for this project, let's assume if Supabase works, we are good, just warn.
-                    console.error("Backend sync failed");
-                    // Still allow login but some persistent data might be missing
-                    localStorage.setItem('customer_token', data.session.access_token);
-                    const userData = {
-                        id: data.user.id,
-                        full_name: data.user.user_metadata.full_name || data.user.email.split('@')[0],
-                        email: data.user.email,
-                        role: 'customer'
-                    };
-                    localStorage.setItem('customer_user', JSON.stringify(userData));
-                    router.push('/');
-                }
-                return;
-            }
-        } catch (err) {
-            console.error("Supabase Login Failed:", err);
-
-            // Fallback: Try Admin Login (Legacy)
-            try {
+            if (authError) {
+                // Step 2: Try Admin Login as fallback
                 const formDataBody = new URLSearchParams();
                 formDataBody.append('username', formData.email);
                 formDataBody.append('password', formData.password);
@@ -156,10 +110,44 @@ export default function Login() {
                     router.push('/admin');
                     return;
                 }
-            } catch (adminErr) {
-                console.error("Admin login failed", adminErr);
+                
+                throw new Error("Invalid email or password");
             }
 
+            if (data?.session) {
+                // Store user data from Supabase
+                const userData = {
+                    id: data.user.id,
+                    full_name: data.user.user_metadata.full_name || data.user.email.split('@')[0],
+                    email: data.user.email,
+                    role: 'customer'
+                };
+                
+                localStorage.setItem('customer_token', data.session.access_token);
+                localStorage.setItem('customer_user', JSON.stringify(userData));
+                
+                // Optional: Sync with backend for order tracking
+                try {
+                    await fetch(`${API_URL}/api/auth/sync`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${data.session.access_token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            full_name: userData.full_name,
+                            email: userData.email,
+                            provider: 'email'
+                        })
+                    });
+                } catch (syncErr) {
+                    console.log('Backend sync skipped:', syncErr);
+                }
+                
+                router.push('/');
+            }
+        } catch (err) {
+            console.error("Login Failed:", err);
             setError(err.message || "Invalid email or password");
         } finally {
             setLoading(false);

@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { getApiUrl } from '../lib/config';
+import { supabase } from '../lib/supabaseClient';
 import Link from 'next/link';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
-import { User, Mail, Lock, AlertCircle, ArrowRight, Loader2 } from 'lucide-react';
+import { User, Mail, Lock, AlertCircle, ArrowRight, Loader2, CheckCircle } from 'lucide-react';
 
 export default function Signup() {
     const router = useRouter();
@@ -15,6 +16,7 @@ export default function Signup() {
     });
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(false);
+    const [success, setSuccess] = useState(false);
 
     const handleChange = (e) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -23,49 +25,81 @@ export default function Signup() {
 
     const handleSignup = async (e) => {
         e.preventDefault();
+        
+        // Validation
         if (formData.password !== formData.confirm_password) {
             setError("Passwords do not match");
             return;
         }
+        
+        if (formData.password.length < 6) {
+            setError("Password must be at least 6 characters");
+            return;
+        }
 
         setLoading(true);
+        setError(null);
+        
         try {
-            // 1. Create User in Supabase Auth
-            const { data, error: funcError } = await import('../lib/supabaseClient').then(mod =>
-                mod.supabase.auth.signUp({
-                    email: formData.email,
-                    password: formData.password,
-                    options: {
-                        data: {
-                            full_name: formData.full_name,
-                        }
+            // Create user in Supabase Auth (data stored in Supabase)
+            const { data, error: signUpError } = await supabase.auth.signUp({
+                email: formData.email,
+                password: formData.password,
+                options: {
+                    data: {
+                        full_name: formData.full_name,
                     }
-                })
-            );
+                }
+            });
 
-            if (funcError) throw funcError;
+            if (signUpError) throw signUpError;
 
             if (data?.user) {
-                // 2. Sync with Backend
-                // We call the social-login endpoint or a new sync endpoint to ensure the user exists in our DB
-                // Since social-login handles "get or create" based on email, we can reuse it or create a dedicated one.
-                // For now, let's try to auto-login.
-
-                // If email confirmation is required, Supabase won't return a session immediately.
+                // Check if session exists (auto-confirm enabled)
                 if (data.session) {
-                    // Auto Login Success
-                    router.push('/login?registered=true#access_token=' + data.session.access_token);
+                    // Auto-login successful
+                    const userData = {
+                        id: data.user.id,
+                        full_name: formData.full_name,
+                        email: formData.email,
+                        role: 'customer'
+                    };
+                    
+                    localStorage.setItem('customer_token', data.session.access_token);
+                    localStorage.setItem('customer_user', JSON.stringify(userData));
+                    
+                    // Sync with backend (optional - for orders tracking)
+                    const API_URL = getApiUrl();
+                    try {
+                        await fetch(`${API_URL}/api/auth/sync`, {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${data.session.access_token}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                full_name: formData.full_name,
+                                email: formData.email,
+                                provider: 'email'
+                            })
+                        });
+                    } catch (syncErr) {
+                        console.log('Backend sync skipped:', syncErr);
+                    }
+                    
+                    setSuccess(true);
+                    setTimeout(() => router.push('/'), 1500);
                 } else {
-                    // Email confirmation needed
-                    setFormData({ ...formData, password: '', confirm_password: '' });
+                    // Email confirmation required
+                    setSuccess(true);
                     setError(null);
-                    // Use a query param to show a different success message
-                    router.push('/login?check_email=true');
+                    setTimeout(() => router.push('/login?check_email=true'), 2000);
                 }
             }
+            
         } catch (err) {
-            console.error(err);
-            setError(err.message || "Registration failed");
+            console.error("Signup error:", err);
+            setError(err.message || "Registration failed. Please try again.");
         } finally {
             setLoading(false);
         }
@@ -96,6 +130,13 @@ export default function Signup() {
             <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
                 <div className="bg-white py-8 px-4 shadow-xl shadow-gray-200/50 rounded-2xl sm:px-10 border border-gray-100">
                     <form className="space-y-6" onSubmit={handleSignup}>
+                        {success && (
+                            <div className="bg-green-50 border border-green-100 text-green-600 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
+                                <CheckCircle size={16} />
+                                Account created successfully! Redirecting...
+                            </div>
+                        )}
+                        
                         {error && (
                             <div className="bg-red-50 border border-red-100 text-red-600 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
                                 <AlertCircle size={16} />

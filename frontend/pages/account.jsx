@@ -4,6 +4,7 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { User, Package, Heart, LogOut, Settings, ChevronUp, ChevronDown, MapPin, Loader2 } from 'lucide-react';
 import { getApiUrl } from '../lib/config';
+import { supabase } from '../lib/supabaseClient';
 
 export default function Account() {
     const router = useRouter();
@@ -70,10 +71,19 @@ export default function Account() {
         };
     }, [moreMenuRef]);
 
-    const handleLogout = () => {
+    const handleLogout = async () => {
+        // Clear local storage
         localStorage.removeItem('customer_token');
         localStorage.removeItem('customer_user');
-        router.push('/');
+        
+        // Also sign out from Supabase (for social login users)
+        try {
+            await supabase.auth.signOut();
+        } catch (err) {
+            console.log('Supabase signout error (ignorable):', err);
+        }
+        
+        router.push('/login');
     };
 
     if (loading) {

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
 import { getApiUrl } from '../lib/config';
 import Head from 'next/head';
 import Link from 'next/link';
@@ -7,18 +8,30 @@ import Footer from '../components/Footer';
 import { Package, CheckCircle, Clock, XCircle, Search } from 'lucide-react';
 
 export default function Orders() {
+  const router = useRouter();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchEmail, setSearchEmail] = useState('');
   const [filteredOrders, setFilteredOrders] = useState([]);
 
   useEffect(() => {
-    fetchOrders();
-  }, []);
+    // Check if user is logged in
+    const token = localStorage.getItem('customer_token');
+    if (!token) {
+      router.push('/login');
+      return;
+    }
+    fetchOrders(token);
+  }, [router]);
 
-  const fetchOrders = async () => {
+  const fetchOrders = async (token) => {
     try {
-      const response = await fetch(`${getApiUrl()}/api/orders`);
+      // Use customer orders API with token - only returns user's own orders
+      const response = await fetch(`${getApiUrl()}/api/customer/orders`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
       if (response.ok) {
         const data = await response.json();
         // Backend returns list of orders with flat structure and items_json string
@@ -35,7 +48,7 @@ export default function Orders() {
           const mainProduct = products.length > 0 ? products[0] : { name: 'Unknown Product', quantity: 0, variant: 'N/A' };
 
           return {
-            id: order.id,
+            id: order.order_id || order.id,
             status: order.status.toLowerCase(),
             createdAt: order.created_at,
             amount: order.total_amount,
@@ -61,6 +74,11 @@ export default function Orders() {
 
         setOrders(adaptedOrders);
         setFilteredOrders(adaptedOrders);
+      } else if (response.status === 401) {
+        // Token expired - redirect to login
+        localStorage.removeItem('customer_token');
+        localStorage.removeItem('customer_user');
+        router.push('/login');
       } else {
         console.error("Failed to fetch orders");
         setOrders([]);

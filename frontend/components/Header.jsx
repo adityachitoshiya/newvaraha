@@ -177,10 +177,13 @@ export default function Header({ cartCount = 0, onCartClick }) {
                 {user ? (
                   <button
                     onClick={() => router.push('/account')}
-                    className="flex items-center justify-center w-10 h-10 text-heritage hover:text-copper transition-colors duration-200 flex-shrink-0"
+                    className="flex items-center gap-2 text-heritage hover:text-copper transition-colors duration-200 flex-shrink-0"
                     aria-label="My Account"
                   >
                     <User size={18} className="sm:w-5 sm:h-5" />
+                    <span className="hidden md:block text-sm font-medium whitespace-nowrap">
+                      Hi {user.name?.split(' ')[0] || 'User'}!
+                    </span>
                   </button>
                 ) : (
                   <Link
