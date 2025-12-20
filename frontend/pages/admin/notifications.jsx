@@ -32,7 +32,8 @@ export default function NotificationsPage() {
 
     const markAsRead = async (id) => {
         try {
-            const response = await fetch(`http://localhost:8000/api/notifications/${id}/read`, {
+            const API_URL = getApiUrl();
+            const response = await fetch(`${API_URL}/api/notifications/${id}/read`, {
                 method: 'POST',
             });
             if (response.ok) {

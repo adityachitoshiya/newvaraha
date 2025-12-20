@@ -48,6 +48,8 @@ class Order(OrderBase, table=True):
     awb_number: Optional[str] = None
     courier_name: Optional[str] = None
     user_id: Optional[uuid.UUID] = Field(default=None, index=True)
+    label_url: Optional[str] = None
+    manifest_url: Optional[str] = None
 
 class AdminUser(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -224,3 +226,19 @@ class OrderReturn(SQLModel, table=True):
     processed_at: Optional[datetime] = None
     admin_notes: Optional[str] = None
     tracking_number: Optional[str] = None  # For return shipment
+    shipment_id: Optional[str] = None # RapidShyp Shipment ID
+    label_url: Optional[str] = None # Return label URL
+
+
+# ==========================================
+# 💰 METAL RATES MODEL  
+# ==========================================
+
+class MetalRates(SQLModel, table=True):
+    """Store current gold and silver rates for display"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    gold_rate: float = Field(default=124040.0)  # 22 Carat per 10g
+    silver_rate: float = Field(default=208900.0)  # 999 Purity per 1kg
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_by: Optional[str] = None  # Admin username
+

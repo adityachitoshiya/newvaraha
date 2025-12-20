@@ -134,7 +134,7 @@ export default function Header({ cartCount = 0, onCartClick }) {
             </nav>
 
             {/* Right Actions */}
-            <div className="flex items-center gap-2 sm:gap-3 md:gap-4 lg:gap-6">
+            <div className="flex items-center gap-2 sm:gap-3 md:gap-3 lg:gap-4">
               {/* Search - Hidden on mobile */}
               <button
                 onClick={() => setIsSearchOpen(!isSearchOpen)}
@@ -181,8 +181,8 @@ export default function Header({ cartCount = 0, onCartClick }) {
                     aria-label="My Account"
                   >
                     <User size={18} className="sm:w-5 sm:h-5" />
-                    <span className="hidden md:block text-sm font-medium whitespace-nowrap">
-                      Hi {user.name?.split(' ')[0] || 'User'}!
+                    <span className="hidden sm:block text-sm font-medium whitespace-nowrap">
+                      Hi {user.full_name?.split(' ')[0] || user.name?.split(' ')[0] || 'User'}!
                     </span>
                   </button>
                 ) : (
@@ -255,10 +255,10 @@ export default function Header({ cartCount = 0, onCartClick }) {
                   <div className="bg-white/50 rounded-lg p-3 flex items-center justify-between border border-heritage/10">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-copper/10 flex items-center justify-center text-copper font-bold">
-                        {user.name?.charAt(0) || 'U'}
+                        {(user.full_name || user.name)?.charAt(0)?.toUpperCase() || 'U'}
                       </div>
                       <div>
-                        <p className="text-sm font-semibold text-heritage">{user.name}</p>
+                        <p className="text-sm font-semibold text-heritage">{user.full_name || user.name}</p>
                         <p className="text-xs text-gray-500">{user.email}</p>
                       </div>
                     </div>

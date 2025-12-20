@@ -25,13 +25,13 @@ export default function Signup() {
 
     const handleSignup = async (e) => {
         e.preventDefault();
-        
+
         // Validation
         if (formData.password !== formData.confirm_password) {
             setError("Passwords do not match");
             return;
         }
-        
+
         if (formData.password.length < 6) {
             setError("Password must be at least 6 characters");
             return;
@@ -39,7 +39,7 @@ export default function Signup() {
 
         setLoading(true);
         setError(null);
-        
+
         try {
             // Create user in Supabase Auth (data stored in Supabase)
             const { data, error: signUpError } = await supabase.auth.signUp({
@@ -61,13 +61,14 @@ export default function Signup() {
                     const userData = {
                         id: data.user.id,
                         full_name: formData.full_name,
+                        name: formData.full_name,  // For backward compatibility
                         email: formData.email,
                         role: 'customer'
                     };
-                    
+
                     localStorage.setItem('customer_token', data.session.access_token);
                     localStorage.setItem('customer_user', JSON.stringify(userData));
-                    
+
                     // Sync with backend (optional - for orders tracking)
                     const API_URL = getApiUrl();
                     try {
@@ -86,7 +87,7 @@ export default function Signup() {
                     } catch (syncErr) {
                         console.log('Backend sync skipped:', syncErr);
                     }
-                    
+
                     setSuccess(true);
                     setTimeout(() => router.push('/'), 1500);
                 } else {
@@ -96,7 +97,7 @@ export default function Signup() {
                     setTimeout(() => router.push('/login?check_email=true'), 2000);
                 }
             }
-            
+
         } catch (err) {
             console.error("Signup error:", err);
             setError(err.message || "Registration failed. Please try again.");
@@ -136,7 +137,7 @@ export default function Signup() {
                                 Account created successfully! Redirecting...
                             </div>
                         )}
-                        
+
                         {error && (
                             <div className="bg-red-50 border border-red-100 text-red-600 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
                                 <AlertCircle size={16} />

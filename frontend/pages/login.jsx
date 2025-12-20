@@ -27,9 +27,11 @@ export default function Login() {
         }
 
         const handleSession = (session) => {
+            const fullName = session.user.user_metadata.full_name || session.user.user_metadata.name || session.user.email.split('@')[0];
             const userData = {
                 id: session.user.id,
-                full_name: session.user.user_metadata.full_name || session.user.user_metadata.name || session.user.email.split('@')[0],
+                full_name: fullName,
+                name: fullName,  // For backward compatibility
                 email: session.user.email,
                 role: 'customer'
             };
@@ -45,13 +47,13 @@ export default function Login() {
             // Check if already logged in (for manual users)
             const existingToken = localStorage.getItem('customer_token');
             const existingUser = localStorage.getItem('customer_user');
-            
+
             // If user is already logged in and not coming from OAuth redirect, go to home
             if (existingToken && existingUser && !window.location.hash?.includes('access_token')) {
                 router.push('/');
                 return;
             }
-            
+
             if (window.location.hash && window.location.hash.includes('access_token')) {
                 supabase.auth.getSession().then(({ data: { session } }) => {
                     if (session) handleSession(session);
@@ -110,22 +112,24 @@ export default function Login() {
                     router.push('/admin');
                     return;
                 }
-                
+
                 throw new Error("Invalid email or password");
             }
 
             if (data?.session) {
                 // Store user data from Supabase
+                const fullName = data.user.user_metadata.full_name || data.user.email.split('@')[0];
                 const userData = {
                     id: data.user.id,
-                    full_name: data.user.user_metadata.full_name || data.user.email.split('@')[0],
+                    full_name: fullName,
+                    name: fullName,  // For backward compatibility
                     email: data.user.email,
                     role: 'customer'
                 };
-                
+
                 localStorage.setItem('customer_token', data.session.access_token);
                 localStorage.setItem('customer_user', JSON.stringify(userData));
-                
+
                 // Optional: Sync with backend for order tracking
                 try {
                     await fetch(`${API_URL}/api/auth/sync`, {
@@ -143,7 +147,7 @@ export default function Login() {
                 } catch (syncErr) {
                     console.log('Backend sync skipped:', syncErr);
                 }
-                
+
                 router.push('/');
             }
         } catch (err) {

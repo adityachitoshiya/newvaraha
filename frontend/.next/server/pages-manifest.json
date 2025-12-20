@@ -1,5 +1,16 @@
 {
   "/_app": "pages/_app.js",
   "/_document": "pages/_document.js",
-  "/": "pages/index.js"
+  "/": "pages/index.js",
+  "/_error": "pages/_error.js",
+  "/story": "pages/story.js",
+  "/admin": "pages/admin.js",
+  "/admin/analytics": "pages/admin/analytics.js",
+  "/admin/cms": "pages/admin/cms.js",
+  "/admin/settings": "pages/admin/settings.js",
+  "/admin/customers": "pages/admin/customers.js",
+  "/admin/coupons": "pages/admin/coupons.js",
+  "/admin/products": "pages/admin/products.js",
+  "/admin/orders": "pages/admin/orders.js",
+  "/admin/metal-rates": "pages/admin/metal-rates.js"
 }

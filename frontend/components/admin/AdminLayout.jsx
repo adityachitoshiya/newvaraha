@@ -13,7 +13,8 @@ import {
     Bell,
     Tag,
     Activity,
-    Image as ImageIcon
+    Image as ImageIcon,
+    TrendingUp
 } from 'lucide-react';
 import { useEffect, useState, useRef } from 'react';
 

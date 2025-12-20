@@ -24,8 +24,21 @@ export default function ProductSpotlight() {
       if (res.ok) {
         const data = await res.json();
         console.log("Spotlight data:", data);
+
+        // First try featured/bestseller products
         const featured = data.filter(p => p.tag === 'Featured' || p.tag === 'Bestseller' || p.premium).slice(0, 5);
-        setProducts(featured.length > 0 ? featured : data.slice(0, 3));
+
+        // If no featured products, show New Arrivals (sort by newest first)
+        if (featured.length === 0 && data.length > 0) {
+          // Sort products by ID (assuming higher ID = newer product)
+          // Or you can add a 'created_at' field to products
+          const newArrivals = [...data].reverse().slice(0, 5);
+          setProducts(newArrivals);
+        } else if (featured.length > 0) {
+          setProducts(featured);
+        } else {
+          setProducts(data.slice(0, 3)); // Fallback to first 3
+        }
       } else {
         setError("Failed to load products");
       }
@@ -39,9 +52,20 @@ export default function ProductSpotlight() {
 
   // Safe fallback if no products
   if (isLoading) return <div className="py-24 text-center text-gray-400">Loading Masterpieces...</div>;
-  if (products.length === 0) return null;
+  if (error) return <div className="py-24 text-center text-red-500">Error: {error}</div>;
+  if (products.length === 0) {
+    return (
+      <div className="py-24 text-center">
+        <p className="text-heritage/60 mb-4">No products available yet</p>
+        <Link href="/admin/products/new" className="text-copper underline">Add your first product</Link>
+      </div>
+    );
+  }
 
   const currentProduct = products[currentIndex];
+
+  // Check if products are featured or new arrivals
+  const hasFeaturedProducts = products.some(p => p.tag === 'Featured' || p.tag === 'Bestseller' || p.premium);
 
   return (
     <section className="py-24 relative overflow-hidden bg-[#faf9f6]">
@@ -56,11 +80,13 @@ export default function ProductSpotlight() {
         {/* Header */}
         <div
           ref={ref}
-          className={`text - center mb - 16 transition - all duration - 1000 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'} `}
+          className={`text-center mb-16 transition-all duration-1000 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}
         >
-          <span className="text-copper font-medium tracking-[0.2em] uppercase text-sm mb-2 block">Exquisite Collection</span>
+          <span className="text-copper font-medium tracking-[0.2em] uppercase text-sm mb-2 block">
+            {hasFeaturedProducts ? 'Exquisite Collection' : 'Fresh Designs'}
+          </span>
           <h2 className="font-royal text-5xl md:text-7xl font-bold text-heritage mb-6">
-            Featured Masterpieces
+            {hasFeaturedProducts ? 'Featured Masterpieces' : 'New Arrivals'}
           </h2>
         </div>
 

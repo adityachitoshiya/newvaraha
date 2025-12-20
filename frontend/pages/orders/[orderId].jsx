@@ -197,9 +197,47 @@ export default function OrderDetails() {
                                 </div>
                             ))}
                         </div>
-                        <div className="mt-4 pt-4 border-t border-copper/30 flex justify-between items-center">
-                            <span className="font-bold text-heritage">Total Amount</span>
-                            <span className="text-xl font-royal font-bold text-copper">₹{order.total_amount}</span>
+
+                        {/* Price Breakdown */}
+                        <div className="mt-6 pt-4 border-t border-copper/20 space-y-2">
+                            {/* Calculate subtotal from items */}
+                            {(() => {
+                                const subtotal = order.items.reduce((sum, item) => sum + (item.price * (item.quantity || 1)), 0);
+                                const codCharges = order.payment_method === 'cod' ? 59 : 0;
+                                const discount = subtotal + codCharges - order.total_amount;
+
+                                return (
+                                    <>
+                                        {/* Subtotal */}
+                                        <div className="flex justify-between text-sm text-heritage/70">
+                                            <span>Subtotal</span>
+                                            <span>₹{subtotal.toLocaleString()}</span>
+                                        </div>
+
+                                        {/* Discount if any */}
+                                        {discount > 0 && (
+                                            <div className="flex justify-between text-sm text-green-600">
+                                                <span>Discount</span>
+                                                <span>-₹{discount.toLocaleString()}</span>
+                                            </div>
+                                        )}
+
+                                        {/* COD Charges */}
+                                        {codCharges > 0 && (
+                                            <div className="flex justify-between text-sm text-heritage/70">
+                                                <span>COD Charges</span>
+                                                <span>₹{codCharges}</span>
+                                            </div>
+                                        )}
+
+                                        {/* Total */}
+                                        <div className="flex justify-between items-center pt-2 mt-2 border-t border-dashed border-copper/30">
+                                            <span className="font-bold text-heritage">Total Amount</span>
+                                            <span className="text-xl font-royal font-bold text-copper">₹{order.total_amount.toLocaleString()}</span>
+                                        </div>
+                                    </>
+                                );
+                            })()}
                         </div>
                     </div>
 

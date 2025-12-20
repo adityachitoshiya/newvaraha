@@ -6,28 +6,64 @@ import { useState, useEffect } from 'react';
 export default function Footer() {
   const [email, setEmail] = useState('');
   const [subscribed, setSubscribed] = useState(false);
-  const [goldRate, setGoldRate] = useState({ price: '68,500', change: '+0.5%' });
-  const [silverRate, setSilverRate] = useState({ price: '82,500', change: '+0.3%' });
+  const [goldRate, setGoldRate] = useState({ price: '1,24,040', change: '+0.5%' });
+  const [silverRate, setSilverRate] = useState({ price: '2,08,900', change: '+0.3%' });
+  const [baseRates, setBaseRates] = useState({ gold: 124040, silver: 208900 });
 
   useEffect(() => {
-    // Simulate live rate updates every 5 seconds
-    const interval = setInterval(() => {
-      const goldChange = (Math.random() - 0.5) * 0.8;
-      const silverChange = (Math.random() - 0.5) * 0.6;
+    // Fetch base rates from database
+    const fetchBaseRates = async () => {
+      try {
+        const API_URL = typeof window !== 'undefined' ?
+          (process.env.NEXT_PUBLIC_API_URL || `http://${window.location.hostname}:8000`) :
+          'http://127.0.0.1:8000';
 
-      setGoldRate(prev => ({
-        price: (parseFloat(prev.price.replace(',', '')) + goldChange).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ','),
-        change: goldChange >= 0 ? `+${goldChange.toFixed(1)}%` : `${goldChange.toFixed(1)}%`
-      }));
+        const response = await fetch(`${API_URL}/api/metal-rates`);
+        const data = await response.json();
 
-      setSilverRate(prev => ({
-        price: (parseFloat(prev.price.replace(',', '')) + silverChange * 10).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ','),
-        change: silverChange >= 0 ? `+${silverChange.toFixed(1)}%` : `${silverChange.toFixed(1)}%`
-      }));
-    }, 5000);
+        setBaseRates({
+          gold: data.gold_rate,
+          silver: data.silver_rate
+        });
+      } catch (error) {
+        console.error('Failed to fetch base rates:', error);
+        // Keep default values if API fails
+      }
+    };
+
+    fetchBaseRates();
+  }, []);
+
+  useEffect(() => {
+    // Simulate realistic rate fluctuations every 30 seconds
+    const updateRates = () => {
+      // Random change between -0.8% to +0.8%
+      const goldChangePercent = (Math.random() - 0.5) * 1.6;
+      const silverChangePercent = (Math.random() - 0.5) * 1.2;
+
+      // Calculate new prices with fluctuation based on database values
+      const goldPrice = Math.round(baseRates.gold + (baseRates.gold * goldChangePercent / 100));
+      const silverPrice = Math.round(baseRates.silver + (baseRates.silver * silverChangePercent / 100));
+
+      setGoldRate({
+        price: goldPrice.toLocaleString('en-IN'),
+        change: `${goldChangePercent >= 0 ? '+' : ''}${goldChangePercent.toFixed(1)}%`
+      });
+
+      setSilverRate({
+        price: silverPrice.toLocaleString('en-IN'),
+        change: `${silverChangePercent >= 0 ? '+' : ''}${silverChangePercent.toFixed(1)}%`
+      });
+    };
+
+    // Update immediately on mount and when base rates change
+    updateRates();
+
+    // Update every 30 seconds
+    const interval = setInterval(updateRates, 30000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [baseRates]); // Re-run when base rates update
 
   const handleSubscribe = (e) => {
     e.preventDefault();
@@ -80,8 +116,8 @@ export default function Footer() {
                 </div>
                 <div className="text-right">
                   <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full ${goldRate.change.startsWith('+')
-                      ? 'bg-green-500/20 text-green-400'
-                      : 'bg-red-500/20 text-red-400'
+                    ? 'bg-green-500/20 text-green-400'
+                    : 'bg-red-500/20 text-red-400'
                     }`}>
                     {goldRate.change}
                   </span>
@@ -102,8 +138,8 @@ export default function Footer() {
                 </div>
                 <div className="text-right">
                   <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full ${silverRate.change.startsWith('+')
-                      ? 'bg-green-500/20 text-green-400'
-                      : 'bg-red-500/20 text-red-400'
+                    ? 'bg-green-500/20 text-green-400'
+                    : 'bg-red-500/20 text-red-400'
                     }`}>
                     {silverRate.change}
                   </span>
@@ -116,7 +152,7 @@ export default function Footer() {
 
           <p className="text-center text-xs text-warm-sand/40 mt-4 flex items-center justify-center gap-2">
             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-            Live rates updated every 5 seconds • Indicative rates
+            Simulated rates • Updates every 30 seconds
           </p>
         </div>
 
@@ -137,8 +173,8 @@ export default function Footer() {
                   {item.icon}
                 </div>
                 <div>
-                  <p className="text-xs sm:text-sm font-bold text-copper">{item.title}</p>
-                  <p className="text-xs text-warm-sand/60 hidden sm:block">{item.desc}</p>
+                  <p className="text-xs sm:text-sm font-bold text-warm-sand">{item.title}</p>
+                  <p className="text-xs text-warm-sand/80">{item.desc}</p>
                 </div>
               </div>
             </div>
@@ -269,10 +305,29 @@ export default function Footer() {
                   { label: 'Our Story', href: '/story' },
                   { label: 'Careers', href: '/coming-soon' },
                   { label: 'Privacy Policy', href: '/privacy-policy' },
+                  { label: 'Cookie Policy', href: '/cookie-policy' },
+                  {
+                    label: 'Cookie Settings', href: '#', onClick: () => {
+                      // Trigger cookie consent modal
+                      if (typeof window !== 'undefined') {
+                        localStorage.removeItem('cookieConsent');
+                        window.location.reload();
+                      }
+                    }
+                  },
                   { label: 'Terms', href: '/terms' }
                 ].map((item) => (
                   <li key={item.label}>
-                    <Link href={item.href} className="hover:text-copper hover:pl-2 transition-all duration-300 inline-block group">
+                    <Link
+                      href={item.href}
+                      className="hover:text-copper hover:pl-2 transition-all duration-300 inline-block group"
+                      onClick={(e) => {
+                        if (item.onClick) {
+                          e.preventDefault();
+                          item.onClick();
+                        }
+                      }}
+                    >
                       <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-300 mr-1">→</span>
                       {item.label}
                     </Link>

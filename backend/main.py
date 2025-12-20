@@ -9,10 +9,11 @@ from database import create_db_and_tables, get_session
 from models import (
     Product, Order, AdminUser, PaymentGateway, Notification, Customer, Review, 
     Coupon, VisitorLog, ActiveVisitor, HeroSlide, CreatorVideo, StoreSettings, 
-    Cart, CartItem, Wishlist, Address, ProductVariant, Inventory, OrderReturn
+    Cart, CartItem, Wishlist, Address, ProductVariant, Inventory, OrderReturn,
+    MetalRates
 )
 from notifications import send_order_notifications
-from rapidshyp_utils import create_rapidshyp_order
+from rapidshyp_utils import rapidshyp_client
 from auth_utils import verify_password, create_access_token
 from sqlmodel import Session, select, func, col, or_
 
@@ -618,6 +619,131 @@ def read_order(order_id: str, session: Session = Depends(get_session)):
         raise HTTPException(status_code=404, detail="Order not found")
     return order
 
+# --- RapidShyp Integration Routes ---
+
+class ShipOrderRequest(BaseModel):
+    pickup_location: Optional[str] = "Primary Warehouse" # Or specific pickup name
+    length: float = 10.0
+    breadth: float = 10.0
+    height: float = 5.0
+    weight: float = 0.5 # kg
+
+@app.post("/api/admin/orders/{order_id}/ship")
+def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUser = Depends(get_current_user), session: Session = Depends(get_session)):
+    # Find order
+    order = session.exec(select(Order).where(Order.order_id == order_id)).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+        
+    if order.shipment_id:
+         raise HTTPException(status_code=400, detail="Order already shipped")
+
+    # Prepare data for RapidShyp
+    # Parse items
+    try:
+        items = json.loads(order.items_json)
+    except:
+        items = []
+
+    order_data = {
+        "orderId": order.order_id,
+        "orderDate": order.created_at.strftime("%Y-%m-%d"),
+        "customer_name": order.customer_name,
+        "email": order.email,
+        "phone": order.phone,
+        "address": order.address,
+        "city": order.city,
+        "pincode": order.pincode,
+        "state": "Maharashtra", # TODO: Store state in Order model or extract from address
+        "items": items,
+        "payment_method": order.payment_method.upper(), # COD or PREPAID
+        "total_amount": order.total_amount,
+        "length": ship_req.length,
+        "breadth": ship_req.breadth,
+        "height": ship_req.height,
+        "weight": ship_req.weight
+    }
+    
+    # Call Wrapper API
+    response = rapidshyp_client.create_forward_order_wrapper(order_data, pickup_location=ship_req.pickup_location)
+    
+    if response.get("status") == "SUCCESS" or response.get("orderCreated"):
+        # Extract Shipment Details
+        shipments = response.get("shipment", [])
+        if shipments:
+            sh = shipments[0]
+            order.shipment_id = sh.get("shipmentId")
+            order.awb_number = sh.get("awb")
+            order.courier_name = sh.get("courierName")
+            order.label_url = sh.get("labelURL")
+            order.manifest_url = sh.get("manifestURL")
+            
+            # Update Status
+            order.status = "Shipped"
+            
+            # Append to history
+            history = json.loads(order.status_history)
+            history.append({
+                "status": "Shipped",
+                "timestamp": datetime.utcnow().isoformat(),
+                "comment": f"Shipped via {order.courier_name}. AWB: {order.awb_number}"
+            })
+            order.status_history = json.dumps(history)
+            
+            session.add(order)
+            session.commit()
+            session.refresh(order)
+            
+            # Trigger notification (Example)
+            # send_order_notifications(order) 
+            
+            return {"ok": True, "shipment": sh}
+    
+    print(f"RapidShyp Error: {response}")
+    raise HTTPException(status_code=400, detail=f"Failed to create shipment: {response.get('remarks') or response}")
+
+@app.get("/api/orders/{order_id}/track")
+def track_order_endpoint(order_id: str, session: Session = Depends(get_session)):
+    order = session.exec(select(Order).where(Order.order_id == order_id)).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    if not order.awb_number:
+         return {"status": "Not Shipped", "details": "Order has not been shipped yet."}
+         
+    tracking_info = rapidshyp_client.track_order(awb=order.awb_number)
+    return tracking_info
+
+class ReturnRequest(BaseModel):
+    items: List[dict] # {sku, quantity, reason_code}
+    pickup_address: dict # {name, phone, address, pincode...}
+    reason_code: str = "OTHER"
+
+@app.post("/api/orders/{order_id}/return")
+def return_order_endpoint(order_id: str, return_req: ReturnRequest, session: Session = Depends(get_session)):
+    # Logic to process return
+    # 1. Check if returnable
+    # 2. Call RapidShyp Return Wrapper
+    # 3. Create OrderReturn entry
+    pass # Placeholder for next iteration if requested
+
+class ServiceabilityCheck(BaseModel):
+    pickup_pincode: str
+    delivery_pincode: str
+    weight: float = 0.5
+    value: float = 1000.0
+    mode: str = "COD"
+
+@app.post("/api/serviceability")
+def check_serviceability(req: ServiceabilityCheck):
+    return rapidshyp_client.check_serviceability(
+        req.pickup_pincode, 
+        req.delivery_pincode, 
+        req.weight, 
+        req.value, 
+        req.mode
+    )
+
 # --- Dynamic Payment Gateway Routes ---
 
 class GatewayCreate(BaseModel):
@@ -791,7 +917,7 @@ def create_cod_order(order_data: OrderCreate, token: str = Depends(oauth2_scheme
             address=order_data.address,
             city=order_data.city,
             pincode=order_data.pincode,
-            total_amount=order_data.amount + (order_data.codCharges or 0), # Keep original total_amount calculation
+            total_amount=order_data.amount,  # Frontend already includes COD charges in finalAmount
             status="Pending", # Keep original status casing
             payment_method=order_data.paymentMethod,
             items_json=items_json,
@@ -1941,6 +2067,85 @@ def process_refund(
 
 
 # ==========================================
+# 💰 LIVE GOLD/SILVER RATES API
+# ==========================================
+
+@app.get("/api/live-rates")
+def get_live_metal_rates():
+    """
+    Fetch live gold and silver rates from GoldAPI.io
+    Returns rates in INR per 10g for gold and per 1kg for silver
+    """
+    import requests
+    import os
+    
+    api_key = os.getenv("GOLDAPI_KEY", "goldapi-177n1tsmjdao3q4-io")
+    
+    try:
+        # Fetch Gold Rate (XAU in INR)
+        gold_url = "https://www.goldapi.io/api/XAU/INR"
+        headers = {
+            "x-access-token": api_key,
+            "Content-Type": "application/json"
+        }
+        
+        gold_response = requests.get(gold_url, headers=headers, timeout=5)
+        gold_data = gold_response.json()
+        
+        # Fetch Silver Rate (XAG in INR)  
+        silver_url = "https://www.goldapi.io/api/XAG/INR"
+        silver_response = requests.get(silver_url, headers=headers, timeout=5)
+        silver_data = silver_response.json()
+        
+        # GoldAPI returns price per troy ounce
+        # 1 troy ounce = 31.1035 grams
+        # Convert to per 10g for gold and per 1kg for silver
+        
+        gold_per_oz = gold_data.get("price", 0)
+        gold_per_10g = (gold_per_oz / 31.1035) * 10
+        
+        silver_per_oz = silver_data.get("price", 0)
+        silver_per_1kg = (silver_per_oz / 31.1035) * 1000
+        
+        # Calculate 24-hour change percentage
+        gold_change_pct = gold_data.get("ch", 0)
+        silver_change_pct = silver_data.get("ch", 0)
+        
+        return {
+            "gold": {
+                "price": round(gold_per_10g, 0),
+                "change": f"{'+' if gold_change_pct >= 0 else ''}{gold_change_pct:.1f}%",
+                "unit": "per 10 grams",
+                "timestamp": gold_data.get("timestamp")
+            },
+            "silver": {
+                "price": round(silver_per_1kg, 0),
+                "change": f"{'+' if silver_change_pct >= 0 else ''}{silver_change_pct:.1f}%",
+                "unit": "per 1 kg", 
+                "timestamp": silver_data.get("timestamp")
+            },
+            "status": "success"
+        }
+        
+    except requests.exceptions.RequestException as e:
+        print(f"GoldAPI Error: {str(e)}")
+        # Return fallback mock data if API fails
+        return {
+            "gold": {
+                "price": 68500,
+                "change": "+0.5%",
+                "unit": "per 10 grams"
+            },
+            "silver": {
+                "price": 82500,
+                "change": "+0.3%",
+                "unit": "per 1 kg"
+            },
+            "status": "fallback"
+        }
+
+
+# ==========================================
 # 🔍 ENHANCED SEARCH & FILTER APIs
 # ==========================================
 
@@ -2111,4 +2316,71 @@ def mark_review_helpful(
         "message": "Marked as helpful",
         "review_id": review_id,
         "helpful_count": review.helpful_count
+    }
+
+# ==========================================
+# 💰 METAL RATES ADMIN APIs
+# ==========================================
+
+@app.get("/api/metal-rates")
+def get_metal_rates(session: Session = Depends(get_session)):
+    """Get current metal rates (public endpoint)"""
+    rates = session.exec(select(MetalRates)).first()
+    
+    if not rates:
+        # Create default record if doesn't exist
+        rates = MetalRates(
+            gold_rate=124040.0,
+            silver_rate=208900.0
+        )
+        session.add(rates)
+        session.commit()
+        session.refresh(rates)
+    
+    return {
+        "gold_rate": rates.gold_rate,
+        "silver_rate": rates.silver_rate,
+        "updated_at": rates.updated_at.isoformat() if rates.updated_at else None
+    }
+
+
+class MetalRatesUpdate(BaseModel):
+    gold_rate: float
+    silver_rate: float
+
+
+@app.post("/api/admin/metal-rates")
+def update_metal_rates(
+    rates_data: MetalRatesUpdate,
+    current_user: AdminUser = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Update metal rates (admin only)"""
+    # Check if user is admin
+    if not isinstance(current_user, AdminUser):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    rates = session.exec(select(MetalRates)).first()
+    
+    if not rates:
+        rates = MetalRates(
+            gold_rate=rates_data.gold_rate,
+            silver_rate=rates_data.silver_rate,
+            updated_by=current_user.username,
+            updated_at=datetime.utcnow()
+        )
+        session.add(rates)
+    else:
+        rates.gold_rate = rates_data.gold_rate
+        rates.silver_rate = rates_data.silver_rate
+        rates.updated_by = current_user.username
+        rates.updated_at = datetime.utcnow()
+    
+    session.commit()
+    session.refresh(rates)
+    
+    return {
+        "message": "Metal rates updated successfully",
+        "gold_rate": rates.gold_rate,
+        "silver_rate": rates.silver_rate
     }

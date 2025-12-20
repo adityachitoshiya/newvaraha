@@ -5,6 +5,8 @@ import { useRouter } from 'next/router';
 import { User, Package, Heart, LogOut, Settings, ChevronUp, ChevronDown, MapPin, Loader2 } from 'lucide-react';
 import { getApiUrl } from '../lib/config';
 import { supabase } from '../lib/supabaseClient';
+import Header from '../components/Header';
+import Footer from '../components/Footer';
 
 export default function Account() {
     const router = useRouter();
@@ -75,14 +77,14 @@ export default function Account() {
         // Clear local storage
         localStorage.removeItem('customer_token');
         localStorage.removeItem('customer_user');
-        
+
         // Also sign out from Supabase (for social login users)
         try {
             await supabase.auth.signOut();
         } catch (err) {
             console.log('Supabase signout error (ignorable):', err);
         }
-        
+
         router.push('/login');
     };
 
@@ -95,127 +97,131 @@ export default function Account() {
     }
 
     return (
-        <div className="min-h-screen bg-[#F8F9FA] pb-24"> {/* Padding bottom for fixed footer menu space */}
+        <>
             <Head>
                 <title>My Account | Varaha Jewels</title>
             </Head>
+            <Header />
+            <div className="min-h-screen bg-[#F8F9FA] pb-24">
 
-            {/* Profile Header */}
-            <div className="bg-white border-b border-gray-200">
-                <div className="max-w-4xl mx-auto px-4 py-8 sm:py-12 flex flex-col sm:flex-row items-center gap-6">
-                    <div className="w-24 h-24 rounded-full bg-gradient-to-br from-copper to-heritage flex items-center justify-center text-white text-3xl font-bold shadow-lg">
-                        {user?.name?.charAt(0) || 'U'}
-                    </div>
-                    <div className="text-center sm:text-left">
-                        <h1 className="text-3xl font-bold text-gray-900 font-serif mb-1">{user?.name}</h1>
-                        <p className="text-gray-500 flex items-center justify-center sm:justify-start gap-2">
-                            {user?.email}
-                        </p>
-                        <div className="mt-4 flex flex-wrap justify-center sm:justify-start gap-3">
-                            <span className="px-3 py-1 bg-copper/10 text-copper rounded-full text-xs font-bold uppercase tracking-wider">
-                                Gold Member
-                            </span>
+                {/* Profile Header */}
+                <div className="bg-white border-b border-gray-200">
+                    <div className="max-w-4xl mx-auto px-4 py-8 sm:py-12 flex flex-col sm:flex-row items-center gap-6">
+                        <div className="w-24 h-24 rounded-full bg-gradient-to-br from-copper to-heritage flex items-center justify-center text-white text-3xl font-bold shadow-lg">
+                            {(user?.full_name || user?.name)?.charAt(0)?.toUpperCase() || 'U'}
                         </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Dashboard Content */}
-            <div className="max-w-4xl mx-auto px-4 py-8 space-y-8">
-
-                {/* Stats / Quick Links */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                    <Link href="/orders" className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-copper/50 hover:shadow-md transition-all text-center group cursor-pointer">
-                        <Package className="w-8 h-8 mx-auto text-gray-400 group-hover:text-copper mb-3 transition-colors" />
-                        <h3 className="font-semibold text-gray-900">Orders</h3>
-                        <p className="text-xs text-gray-500 mt-1">{orders.length} active</p>
-                    </Link>
-                    <Link href="/wishlist" className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-copper/50 hover:shadow-md transition-all text-center group cursor-pointer">
-                        <Heart className="w-8 h-8 mx-auto text-gray-400 group-hover:text-red-500 mb-3 transition-colors" />
-                        <h3 className="font-semibold text-gray-900">Wishlist</h3>
-                        <p className="text-xs text-gray-500 mt-1">View Saved</p>
-                    </Link>
-                    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-copper/50 hover:shadow-md transition-all text-center group cursor-pointer">
-                        <MapPin className="w-8 h-8 mx-auto text-gray-400 group-hover:text-copper mb-3 transition-colors" />
-                        <h3 className="font-semibold text-gray-900">Addresses</h3>
-                        <p className="text-xs text-gray-500 mt-1">Manage</p>
-                    </div>
-                    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-copper/50 hover:shadow-md transition-all text-center group cursor-pointer">
-                        <User className="w-8 h-8 mx-auto text-gray-400 group-hover:text-copper mb-3 transition-colors" />
-                        <h3 className="font-semibold text-gray-900">Profile</h3>
-                        <p className="text-xs text-gray-500 mt-1">Edit Info</p>
-                    </div>
-                </div>
-
-                {/* Recent Orders Preview */}
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                    <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                        <h2 className="font-bold text-gray-900">Recent Orders</h2>
-                        <Link href="/orders" className="text-sm text-copper hover:text-heritage font-medium">View All</Link>
-                    </div>
-                    <div className="divide-y divide-gray-100">
-                        {orders.map(order => (
-                            <div key={order.id} className="p-6 flex items-center justify-between hover:bg-gray-50 transition-colors">
-                                <div>
-                                    <p className="font-semibold text-gray-900">{order.id} <span className="text-gray-400 font-normal mx-2">•</span> {order.date}</p>
-                                    <p className="text-sm text-gray-500 mt-1">{order.items} Items • {order.total}</p>
-                                </div>
-                                <div>
-                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${order.status === 'Delivered' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
-                                        }`}>
-                                        {order.status}
-                                    </span>
-                                </div>
+                        <div className="text-center sm:text-left">
+                            <h1 className="text-3xl font-bold text-gray-900 font-serif mb-1">{user?.full_name || user?.name}</h1>
+                            <p className="text-gray-500 flex items-center justify-center sm:justify-start gap-2">
+                                {user?.email}
+                            </p>
+                            <div className="mt-4 flex flex-wrap justify-center sm:justify-start gap-3">
+                                <span className="px-3 py-1 bg-copper/10 text-copper rounded-full text-xs font-bold uppercase tracking-wider">
+                                    Gold Member
+                                </span>
                             </div>
-                        ))}
-                    </div>
-                </div>
-            </div>
-
-            {/* Bottom "More" Dropdown Area */}
-            <div className="fixed bottom-6 left-0 right-0 flex justify-center z-40 pointer-events-none">
-                <div className="relative pointer-events-auto" ref={moreMenuRef}>
-
-                    {/* Dropdown Menu (Appears ABOVE the button) */}
-                    <div className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-56 bg-white rounded-xl shadow-2xl ring-1 ring-black ring-opacity-5 transition-all duration-300 origin-bottom ${isMoreOpen ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-95 translate-y-4 pointer-events-none'
-                        }`}>
-                        <div className="p-2 space-y-1">
-                            <button
-                                className="w-full flex items-center px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 rounded-lg transition-colors group"
-                            >
-                                <Settings size={18} className="mr-3 text-gray-400 group-hover:text-copper" />
-                                Account Settings
-                            </button>
-                            <button
-                                className="w-full flex items-center px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 rounded-lg transition-colors group"
-                            >
-                                <UsersIcon />
-                                Refer a Friend
-                            </button>
-                            <div className="h-px bg-gray-100 my-1"></div>
-                            <button
-                                onClick={handleLogout}
-                                className="w-full flex items-center px-4 py-3 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                            >
-                                <LogOut size={18} className="mr-3" />
-                                Logout
-                            </button>
                         </div>
-                        {/* Little triangle arrow pointing down */}
-                        <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-4 h-4 bg-white transform rotate-45 shadow-sm"></div>
+                    </div>
+                </div>
+
+                {/* Dashboard Content */}
+                <div className="max-w-4xl mx-auto px-4 py-8 space-y-8">
+
+                    {/* Stats / Quick Links */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                        <Link href="/orders" className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-copper/50 hover:shadow-md transition-all text-center group cursor-pointer">
+                            <Package className="w-8 h-8 mx-auto text-gray-400 group-hover:text-copper mb-3 transition-colors" />
+                            <h3 className="font-semibold text-gray-900">Orders</h3>
+                            <p className="text-xs text-gray-500 mt-1">{orders.length} active</p>
+                        </Link>
+                        <Link href="/wishlist" className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-copper/50 hover:shadow-md transition-all text-center group cursor-pointer">
+                            <Heart className="w-8 h-8 mx-auto text-gray-400 group-hover:text-red-500 mb-3 transition-colors" />
+                            <h3 className="font-semibold text-gray-900">Wishlist</h3>
+                            <p className="text-xs text-gray-500 mt-1">View Saved</p>
+                        </Link>
+                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-copper/50 hover:shadow-md transition-all text-center group cursor-pointer">
+                            <MapPin className="w-8 h-8 mx-auto text-gray-400 group-hover:text-copper mb-3 transition-colors" />
+                            <h3 className="font-semibold text-gray-900">Addresses</h3>
+                            <p className="text-xs text-gray-500 mt-1">Manage</p>
+                        </div>
+                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-copper/50 hover:shadow-md transition-all text-center group cursor-pointer">
+                            <User className="w-8 h-8 mx-auto text-gray-400 group-hover:text-copper mb-3 transition-colors" />
+                            <h3 className="font-semibold text-gray-900">Profile</h3>
+                            <p className="text-xs text-gray-500 mt-1">Edit Info</p>
+                        </div>
                     </div>
 
-                    {/* Toggle Button */}
-                    <button
-                        onClick={() => setIsMoreOpen(!isMoreOpen)}
-                        className={`flex items-center gap-2 px-6 py-3 bg-heritage text-white rounded-full shadow-lg hover:bg-heritage/90 transition-all transform hover:scale-105 active:scale-95 ${isMoreOpen ? 'ring-4 ring-copper/30' : ''}`}
-                    >
-                        <span className="font-medium text-sm">Click here for more</span>
-                        {isMoreOpen ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-                    </button>
+                    {/* Recent Orders Preview */}
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                        <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                            <h2 className="font-bold text-gray-900">Recent Orders</h2>
+                            <Link href="/orders" className="text-sm text-copper hover:text-heritage font-medium">View All</Link>
+                        </div>
+                        <div className="divide-y divide-gray-100">
+                            {orders.map(order => (
+                                <div key={order.id} className="p-6 flex items-center justify-between hover:bg-gray-50 transition-colors">
+                                    <div>
+                                        <p className="font-semibold text-gray-900">{order.id} <span className="text-gray-400 font-normal mx-2">•</span> {order.date}</p>
+                                        <p className="text-sm text-gray-500 mt-1">{order.items} Items • {order.total}</p>
+                                    </div>
+                                    <div>
+                                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${order.status === 'Delivered' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                                            }`}>
+                                            {order.status}
+                                        </span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Bottom "More" Dropdown Area */}
+                <div className="fixed bottom-6 left-0 right-0 flex justify-center z-40 pointer-events-none">
+                    <div className="relative pointer-events-auto" ref={moreMenuRef}>
+
+                        {/* Dropdown Menu (Appears ABOVE the button) */}
+                        <div className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-56 bg-white rounded-xl shadow-2xl ring-1 ring-black ring-opacity-5 transition-all duration-300 origin-bottom ${isMoreOpen ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-95 translate-y-4 pointer-events-none'
+                            }`}>
+                            <div className="p-2 space-y-1">
+                                <button
+                                    className="w-full flex items-center px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 rounded-lg transition-colors group"
+                                >
+                                    <Settings size={18} className="mr-3 text-gray-400 group-hover:text-copper" />
+                                    Account Settings
+                                </button>
+                                <button
+                                    className="w-full flex items-center px-4 py-3 text-sm text-gray-700 hover:bg-gray-50 rounded-lg transition-colors group"
+                                >
+                                    <UsersIcon />
+                                    Refer a Friend
+                                </button>
+                                <div className="h-px bg-gray-100 my-1"></div>
+                                <button
+                                    onClick={handleLogout}
+                                    className="w-full flex items-center px-4 py-3 text-sm text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                >
+                                    <LogOut size={18} className="mr-3" />
+                                    Logout
+                                </button>
+                            </div>
+                            {/* Little triangle arrow pointing down */}
+                            <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-4 h-4 bg-white transform rotate-45 shadow-sm"></div>
+                        </div>
+
+                        {/* Toggle Button */}
+                        <button
+                            onClick={() => setIsMoreOpen(!isMoreOpen)}
+                            className={`flex items-center gap-2 px-6 py-3 bg-heritage text-white rounded-full shadow-lg hover:bg-heritage/90 transition-all transform hover:scale-105 active:scale-95 ${isMoreOpen ? 'ring-4 ring-copper/30' : ''}`}
+                        >
+                            <span className="font-medium text-sm">Click here for more</span>
+                            {isMoreOpen ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                        </button>
+                    </div>
                 </div>
             </div>
-        </div>
+            <Footer />
+        </>
     );
 }
 
