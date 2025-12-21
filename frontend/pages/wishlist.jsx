@@ -1,26 +1,61 @@
 import { useState, useEffect } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
+import Image from 'next/image';
 import { Heart, X, ShoppingCart, Trash2, ArrowRight } from 'lucide-react';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
+import { getApiUrl } from '../lib/config';
+import { useCart } from '../context/CartContext';
 
 export default function Wishlist() {
   const [wishlistItems, setWishlistItems] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [enrichedWishlist, setEnrichedWishlist] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { addToCart } = useCart();
 
   // Load wishlist on mount
   useEffect(() => {
     loadWishlist();
-    
+    fetchProducts();
+
     // Listen for wishlist updates
     const handleWishlistUpdate = () => {
       loadWishlist();
     };
-    
+
     window.addEventListener('wishlistUpdated', handleWishlistUpdate);
     return () => window.removeEventListener('wishlistUpdated', handleWishlistUpdate);
   }, []);
+
+  // Enrich wishlist items with product data
+  useEffect(() => {
+    if (products.length > 0 && wishlistItems.length > 0) {
+      const enriched = wishlistItems.map(item => {
+        const product = products.find(p => p.id === item.id) || products.find(p => p.id === item.productId);
+        return product ? { ...item, ...product } : item;
+      });
+      setEnrichedWishlist(enriched);
+    } else if (wishlistItems.length > 0) {
+      setEnrichedWishlist(wishlistItems);
+    } else {
+      setEnrichedWishlist([]);
+    }
+  }, [wishlistItems, products]);
+
+  const fetchProducts = async () => {
+    try {
+      const API_URL = getApiUrl();
+      const res = await fetch(`${API_URL}/api/products`);
+      if (res.ok) {
+        const data = await res.json();
+        setProducts(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch products for wishlist", error);
+    }
+  };
 
   // Load wishlist from localStorage
   const loadWishlist = () => {
@@ -42,7 +77,7 @@ export default function Wishlist() {
     localStorage.setItem('wishlist', JSON.stringify(updatedWishlist));
     setWishlistItems(updatedWishlist);
     window.dispatchEvent(new Event('wishlistUpdated'));
-    
+
     // Show toast
     showToast('💔 Removed from Wishlist');
   };
@@ -57,44 +92,26 @@ export default function Wishlist() {
     }
   };
 
-  // Add to cart
-  const addToCart = (item) => {
-    // Get existing cart
-    const cart = JSON.parse(localStorage.getItem('cart') || '[]');
-    
-    // Check if item already in cart
-    const existingItem = cart.find(cartItem => cartItem.id === item.id);
-    
-    if (existingItem) {
-      existingItem.quantity += 1;
-    } else {
-      cart.push({ ...item, quantity: 1 });
-    }
-    
-    localStorage.setItem('cart', JSON.stringify(cart));
-    window.dispatchEvent(new Event('cartUpdated'));
-    showToast('🛒 Added to Cart');
-  };
+
 
   // Move all to cart
   const moveAllToCart = () => {
-    const cart = JSON.parse(localStorage.getItem('cart') || '[]');
-    
-    wishlistItems.forEach(item => {
-      const existingItem = cart.find(cartItem => cartItem.id === item.id);
-      if (existingItem) {
-        existingItem.quantity += 1;
-      } else {
-        cart.push({ ...item, quantity: 1 });
-      }
+    enrichedWishlist.forEach(item => {
+      handleAddToCart(item);
     });
-    
-    localStorage.setItem('cart', JSON.stringify(cart));
-    window.dispatchEvent(new Event('cartUpdated'));
-    
-    // Clear wishlist after moving
+
     clearWishlist();
     showToast('🛒 All items added to Cart');
+  };
+
+  const handleAddToCart = (item) => {
+    const variant = {
+      sku: item.id,
+      price: item.price,
+      name: item.name,
+      image: item.image
+    };
+    addToCart(item, variant, 1);
   };
 
   // Show toast notification
@@ -141,7 +158,7 @@ export default function Wishlist() {
                   {wishlistItems.length} {wishlistItems.length === 1 ? 'item' : 'items'} saved
                 </p>
               </div>
-              
+
               {wishlistItems.length > 0 && (
                 <div className="flex gap-2 sm:gap-3">
                   <button
@@ -187,12 +204,12 @@ export default function Wishlist() {
             <>
               {/* Wishlist Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-                {wishlistItems.map((item) => (
+                {enrichedWishlist.map((item) => (
                   <WishlistCard
                     key={item.id}
                     item={item}
                     onRemove={removeFromWishlist}
-                    onAddToCart={addToCart}
+                    onAddToCart={handleAddToCart}
                   />
                 ))}
               </div>
@@ -226,13 +243,15 @@ function WishlistCard({ item, onRemove, onAddToCart }) {
       {/* Image */}
       <Link href={`/product/${item.id}`}>
         <div className="relative aspect-square overflow-hidden bg-gray-100 cursor-pointer">
-          <img
+          <Image
             src={imageError ? '/varaha-assets/logo.png' : (item.image || item.images?.[0] || '/varaha-assets/logo.png')}
             alt={item.name || item.title || 'Product'}
+            width={400}
+            height={400}
             className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
             onError={() => setImageError(true)}
           />
-          
+
           {/* Remove Button */}
           <button
             onClick={(e) => {
@@ -261,10 +280,10 @@ function WishlistCard({ item, onRemove, onAddToCart }) {
             {item.name || item.title || 'Jewelry Item'}
           </h3>
         </Link>
-        
+
         <div className="flex items-center gap-2 mb-4">
           <p className="text-2xl font-bold text-heritage">
-            ₹{item.price?.toLocaleString('en-IN') || 'N/A'}
+            {item.price ? `₹${item.price.toLocaleString('en-IN')}` : <span className="text-copper text-lg">Price on Request</span>}
           </p>
           {item.originalPrice && item.originalPrice > item.price && (
             <p className="text-sm text-gray-400 line-through">
@@ -275,7 +294,10 @@ function WishlistCard({ item, onRemove, onAddToCart }) {
 
         {/* Add to Cart Button */}
         <button
-          onClick={() => onAddToCart(item)}
+          onClick={() => {
+            onAddToCart(item);
+            alert('Added to cart!');
+          }}
           className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-copper to-heritage text-white font-semibold rounded-lg hover:shadow-lg hover:scale-105 transition-all duration-300"
         >
           <ShoppingCart size={18} />

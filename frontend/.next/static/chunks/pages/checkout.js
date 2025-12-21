@@ -11,8 +11,8 @@ __turbopack_load_page_chunks__("/checkout", [
   "static/chunks/node_modules_@supabase_auth-js_dist_module_105bee._.js",
   "static/chunks/node_modules_@supabase_storage-js_dist_index_mjs_12daf3._.js",
   "static/chunks/node_modules_@supabase_realtime-js_dist_module_6c5d4b._.js",
-  "static/chunks/node_modules_8e776b._.js",
-  "static/chunks/node_modules_next_dist_pages_3cc3c1._.js",
-  "static/chunks/[next]_entry_page-loader_ts_98d2fe._.js",
-  "static/chunks/[next]_entry_page-loader_ts_e54e1b._.js"
+  "static/chunks/node_modules_96b62d._.js",
+  "static/chunks/node_modules_next_dist_pages_022a3a._.js",
+  "static/chunks/[next]_entry_page-loader_ts_d03a01._.js",
+  "static/chunks/[next]_entry_page-loader_ts_f57c3f._.js"
 ])

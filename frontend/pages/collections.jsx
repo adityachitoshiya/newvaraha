@@ -1,18 +1,21 @@
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
 import { getApiUrl } from '../lib/config';
 import Head from 'next/head';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
 import ProductCard from '../components/collections/ProductCard';
 import QuickLookModal from '../components/collections/QuickLookModal';
-import { SlidersHorizontal, Grid3x3, LayoutGrid, X } from 'lucide-react';
+import { SlidersHorizontal, Grid3x3, LayoutGrid, X, Search } from 'lucide-react';
 
 export default function Collections() {
+  const router = useRouter();
   const [products, setProducts] = useState([]);
   const [filteredProducts, setFilteredProducts] = useState([]);
   const [selectedQuickLook, setSelectedQuickLook] = useState(null);
   const [isQuickLookOpen, setIsQuickLookOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Filter states
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -31,6 +34,10 @@ export default function Collections() {
   const [isCartModalOpen, setIsCartModalOpen] = useState(false);
 
   useEffect(() => {
+    // Read search query from URL
+    if (router.query.search) {
+      setSearchQuery(router.query.search);
+    }
     fetchProducts();
     // Load cart from localStorage
     const savedCart = localStorage.getItem('cart');
@@ -41,7 +48,7 @@ export default function Collections() {
         console.error('Failed to parse cart:', e);
       }
     }
-  }, []);
+  }, [router.query.search]);
 
   const fetchProducts = async () => {
     try {
@@ -73,7 +80,15 @@ export default function Collections() {
   useEffect(() => {
     let filtered = [...products];
 
-    // Category filter
+    // Search filter
+    if (searchQuery) {
+      const term = searchQuery.toLowerCase();
+      filtered = filtered.filter(p =>
+        p.name.toLowerCase().includes(term) ||
+        p.description?.toLowerCase().includes(term) ||
+        p.category?.toLowerCase().includes(term)
+      );
+    }
     if (selectedCategory !== 'All') {
       filtered = filtered.filter(p => p.category === selectedCategory);
     }
@@ -125,7 +140,7 @@ export default function Collections() {
     }
 
     setFilteredProducts(filtered);
-  }, [selectedCategory, selectedMetal, selectedStyle, priceRange, selectedTags, sortBy, products]);
+  }, [selectedCategory, selectedMetal, selectedStyle, priceRange, selectedTags, sortBy, products, searchQuery]);
 
   const toggleTag = (tag) => {
     setSelectedTags(prev =>
@@ -145,13 +160,15 @@ export default function Collections() {
     setPriceRange([0, 5000000]);
     setSelectedTags([]);
     setSortBy('popular');
+    setSearchQuery('');
   };
 
   const activeFiltersCount =
     (selectedCategory !== 'All' ? 1 : 0) +
     (selectedMetal !== 'All' ? 1 : 0) +
     (selectedStyle !== 'All' ? 1 : 0) +
-    (selectedTags.length > 0 ? selectedTags.length : 0);
+    (selectedTags.length > 0 ? selectedTags.length : 0) +
+    (searchQuery ? 1 : 0);
 
   return (
     <>
@@ -204,6 +221,18 @@ export default function Collections() {
                     Clear all
                   </button>
                 )}
+              </div>
+
+              {/* Search Input */}
+              <div className="relative flex-1 max-w-xs">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-heritage/40 w-4 h-4" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search products..."
+                  className="w-full pl-10 pr-4 py-2 border border-heritage/20 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-heritage/30"
+                />
               </div>
 
               {/* Center: Quick Category Tabs (Desktop) */}

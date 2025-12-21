@@ -5,11 +5,12 @@ import { Heart } from 'lucide-react';
  * Wishlist Button Component
  * Add/Remove products from wishlist with heart animation
  */
-export default function WishlistButton({ 
-  productId, 
+export default function WishlistButton({
+  productId,
   productData = null,
   size = 'md',
   showToast = true,
+  showText = false,
   className = ''
 }) {
   const [isInWishlist, setIsInWishlist] = useState(false);
@@ -105,7 +106,7 @@ export default function WishlistButton({
     }, 2000);
   };
 
-  // Size variants
+  // Size variants (for icon-only mode)
   const sizeClasses = {
     sm: 'w-8 h-8',
     md: 'w-10 h-10',
@@ -120,6 +121,33 @@ export default function WishlistButton({
     xl: 28
   };
 
+  // Full button with text (Varaha theme)
+  if (showText) {
+    return (
+      <button
+        onClick={toggleWishlist}
+        className={`
+          flex items-center justify-center gap-2
+          transition-all duration-300
+          ${isInWishlist
+            ? 'bg-copper/10 text-copper border-copper'
+            : 'bg-warm-sand text-heritage border-copper/50 hover:border-copper'
+          }
+          ${isAnimating ? 'animate-heartbeat' : ''}
+          ${className}
+        `}
+        aria-label={isInWishlist ? 'Remove from wishlist' : 'Add to wishlist'}
+      >
+        <Heart
+          size={20}
+          className={`transition-all duration-300 ${isInWishlist ? 'fill-current text-copper' : 'text-copper'}`}
+        />
+        <span className="font-bold">WISHLIST</span>
+      </button>
+    );
+  }
+
+  // Icon-only button (original)
   return (
     <button
       onClick={toggleWishlist}
@@ -128,9 +156,9 @@ export default function WishlistButton({
         rounded-full
         flex items-center justify-center
         transition-all duration-300
-        ${isInWishlist 
-          ? 'bg-red-500 text-white shadow-lg shadow-red-500/30 hover:bg-red-600 hover:scale-110' 
-          : 'bg-white/90 backdrop-blur-sm text-gray-600 hover:bg-white hover:text-red-500 hover:scale-110 shadow-md'
+        ${isInWishlist
+          ? 'bg-copper text-white shadow-lg shadow-copper/30 hover:bg-heritage hover:scale-110'
+          : 'bg-warm-sand/90 backdrop-blur-sm text-heritage hover:bg-warm-sand hover:text-copper hover:scale-110 shadow-md'
         }
         ${isAnimating ? 'animate-heartbeat' : ''}
         ${className}
@@ -145,3 +173,4 @@ export default function WishlistButton({
     </button>
   );
 }
+

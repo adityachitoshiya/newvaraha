@@ -4,15 +4,18 @@ import { useRouter } from 'next/router';
 import Head from 'next/head';
 import Link from 'next/link';
 import Image from 'next/image';
-import Script from 'next/script'; // Import Script for Razorpay
+import Script from 'next/script';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
-import { ShoppingBag, ArrowLeft, Lock, CreditCard, Truck, Check, Tag } from 'lucide-react';
+import { ShoppingBag, ArrowLeft, ArrowRight, Lock, CreditCard, Truck, Check, Tag, MapPin, User, Wallet, ChevronLeft } from 'lucide-react';
 
 export default function Checkout() {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Mobile step state (1 = Address, 2 = Payment, 3 = Review)
+  const [currentStep, setCurrentStep] = useState(1);
 
   // Customer details
   const [formData, setFormData] = useState({
@@ -25,6 +28,9 @@ export default function Checkout() {
     pincode: '',
   });
 
+  // Step 1 validation errors
+  const [stepErrors, setStepErrors] = useState({});
+
   // Coupon state
   const [couponCode, setCouponCode] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState(null);
@@ -32,23 +38,16 @@ export default function Checkout() {
   const [discount, setDiscount] = useState(0);
 
   // Payment method state
-  const [paymentMethod, setPaymentMethod] = useState('online'); // 'online' or 'cod'
-
-  // COD Confirmation Modal state
-  const [showCODConfirmation, setShowCODConfirmation] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState('online');
 
   // Cart items state
   const [cartItems, setCartItems] = useState([]);
-
-  // Product details from URL params (for direct checkout from product page)
   const [orderDetails, setOrderDetails] = useState(null);
 
   useEffect(() => {
-    // Check if coming from cart or direct product checkout
     const { productId, variantId, quantity, amount, productName, fromCart } = router.query;
 
     if (fromCart === 'true') {
-      // Load cart items from localStorage
       const savedCart = localStorage.getItem('cart');
       if (savedCart) {
         try {
@@ -59,7 +58,6 @@ export default function Checkout() {
         }
       }
     } else if (productId && variantId && quantity && amount) {
-      // Direct checkout from product page
       const { image, description } = router.query;
       setOrderDetails({
         productId,
@@ -80,13 +78,16 @@ export default function Checkout() {
       [name]: value
     }));
 
-    // Auto-fetch city and state when pincode is entered (6 digits)
+    // Clear error for this field
+    if (stepErrors[name]) {
+      setStepErrors(prev => ({ ...prev, [name]: null }));
+    }
+
     if (name === 'pincode' && value.length === 6) {
       fetchPincodeDetails(value);
     }
   };
 
-  // Fetch city and state from pincode
   const fetchPincodeDetails = async (pincode) => {
     try {
       const response = await fetch(`https://api.postalpincode.in/pincode/${pincode}`);
@@ -125,7 +126,7 @@ export default function Checkout() {
 
       if (res.ok) {
         const data = await res.json();
-        setAppliedCoupon(data); // Store full coupon object: { code, discount_type, discount_value }
+        setAppliedCoupon(data);
       } else {
         const err = await res.json();
         setCouponError(err.detail || 'Invalid Coupon');
@@ -145,9 +146,8 @@ export default function Checkout() {
   };
 
   const totalAmount = calculateTotal();
-  const COD_CHARGE = 59; // Cash on delivery charges
+  const COD_CHARGE = 59;
 
-  // Calculate discounted amount
   let discountAmount = 0;
   if (appliedCoupon) {
     if (appliedCoupon.discount_type === 'percentage') {
@@ -155,23 +155,53 @@ export default function Checkout() {
     } else if (appliedCoupon.discount_type === 'fixed') {
       discountAmount = appliedCoupon.discount_value;
     } else if (appliedCoupon.discount_type === 'flat_price') {
-      // If flat price is 1, essentially discount is Total - 1
       discountAmount = totalAmount - appliedCoupon.discount_value;
     }
   }
 
-  // Calculate final amount
   let finalAmount = totalAmount - discountAmount;
   if (finalAmount < 0) finalAmount = 0;
-
   if (paymentMethod === 'cod') {
     finalAmount += COD_CHARGE;
   }
 
-  // Handle Razorpay Payment Success
+  // Step validation
+  const validateStep1 = () => {
+    const errors = {};
+    if (!formData.name.trim()) errors.name = 'Name is required';
+    if (!formData.email.trim()) errors.email = 'Email is required';
+    if (!formData.contact.trim()) errors.contact = 'Phone is required';
+    else if (!/^[0-9]{10}$/.test(formData.contact)) errors.contact = 'Enter valid 10-digit number';
+    if (!formData.address.trim()) errors.address = 'Address is required';
+    if (!formData.pincode.trim() || formData.pincode.length !== 6) errors.pincode = 'Valid pincode required';
+    if (!formData.city.trim()) errors.city = 'City is required';
+    if (!formData.state.trim()) errors.state = 'State is required';
+
+    setStepErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const nextStep = () => {
+    if (currentStep === 1) {
+      if (validateStep1()) {
+        setCurrentStep(2);
+        window.scrollTo(0, 0);
+      }
+    } else if (currentStep === 2) {
+      setCurrentStep(3);
+      window.scrollTo(0, 0);
+    }
+  };
+
+  const prevStep = () => {
+    if (currentStep > 1) {
+      setCurrentStep(currentStep - 1);
+      window.scrollTo(0, 0);
+    }
+  };
+
+  // Razorpay Success Handler
   const handleRazorpaySuccess = async (response) => {
-    // Order is already saved in backend through Razorpay webhook/callback
-    // Just redirect to success page
     router.push({
       pathname: '/payment-success',
       query: {
@@ -185,24 +215,10 @@ export default function Checkout() {
   };
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     setIsLoading(true);
     setError(null);
 
-    // Validation
-    if (!formData.name || !formData.email || !formData.contact || !formData.address || !formData.city || !formData.state || !formData.pincode) {
-      setError('Please fill all required fields');
-      setIsLoading(false);
-      return;
-    }
-
-    if (!/^[0-9]{10}$/.test(formData.contact)) {
-      setError('Please enter a valid 10-digit mobile number');
-      setIsLoading(false);
-      return;
-    }
-
-    // Prepare order data
     const orderData = cartItems.length > 0
       ? {
         items: cartItems.map(item => ({
@@ -244,8 +260,6 @@ export default function Checkout() {
         if (!token) {
           setError('Please login to place an order');
           setIsLoading(false);
-          // Optionally redirect to login
-          // router.push('/login?redirect=/checkout');
           return;
         }
 
@@ -259,7 +273,6 @@ export default function Checkout() {
         });
         const data = await response.json();
         if (response.ok) {
-          // Order saved to Supabase backend successfully
           if (cartItems.length > 0) localStorage.removeItem('cart');
           router.push({
             pathname: '/payment-success',
@@ -275,7 +288,7 @@ export default function Checkout() {
       return;
     }
 
-    // Online Payment (Razorpay)
+    // Online Payment
     try {
       const token = localStorage.getItem('customer_token') || localStorage.getItem('token');
       if (!token) {
@@ -296,8 +309,6 @@ export default function Checkout() {
 
       if (!response.ok) throw new Error(data.detail || 'Failed to initiate payment');
 
-      console.log('Checkout Session Data:', data);
-
       if (data && data.key && data.orderId) {
         const options = {
           key: data.key,
@@ -313,17 +324,14 @@ export default function Checkout() {
             email: formData.email,
             contact: formData.contact
           },
-          theme: {
-            color: "#B76E79" // Copper color
-          }
+          theme: { color: "#A3562A" }
         };
 
         const rzp = new window.Razorpay(options);
         rzp.open();
         setIsLoading(false);
       } else {
-        console.error('Missing config:', data);
-        throw new Error(`Invalid payment configuration. Key: ${data?.key ? 'OK' : 'MISSING'}, OrderId: ${data?.orderId ? 'OK' : 'MISSING'}`);
+        throw new Error('Invalid payment configuration');
       }
 
     } catch (err) {
@@ -331,6 +339,9 @@ export default function Checkout() {
       setIsLoading(false);
     }
   };
+
+  // Get items to display
+  const displayItems = cartItems.length > 0 ? cartItems : (orderDetails ? [orderDetails] : []);
 
   if (!orderDetails && cartItems.length === 0) {
     return (
@@ -343,19 +354,368 @@ export default function Checkout() {
     );
   }
 
+  // Step Indicator Component
+  const renderStepIndicator = () => (
+    <div className="flex items-center justify-center mb-6">
+      {[
+        { num: 1, label: 'Address', icon: MapPin },
+        { num: 2, label: 'Payment', icon: Wallet },
+        { num: 3, label: 'Review', icon: Check }
+      ].map((step, index) => (
+        <div key={step.num} className="flex items-center">
+          <div className="flex flex-col items-center">
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 transition-colors ${currentStep > step.num
+              ? 'bg-copper border-copper text-white'
+              : currentStep === step.num
+                ? 'border-copper text-copper bg-white'
+                : 'border-gray-300 text-gray-400 bg-white'
+              }`}>
+              {currentStep > step.num ? <Check size={18} /> : <step.icon size={18} />}
+            </div>
+            <span className={`text-xs mt-1 font-medium ${currentStep >= step.num ? 'text-heritage' : 'text-gray-400'
+              }`}>{step.label}</span>
+          </div>
+          {index < 2 && (
+            <div className={`w-12 h-0.5 mx-2 ${currentStep > step.num ? 'bg-copper' : 'bg-gray-300'
+              }`} />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+
+  // Mobile Step 1: Address
+  const renderAddressStep = () => (
+    <div className="space-y-4">
+      <h2 className="text-xl font-bold text-heritage flex items-center gap-2">
+        <MapPin size={20} className="text-copper" />
+        Delivery Address
+      </h2>
+
+      <div className="space-y-3">
+        <div>
+          <input
+            name="name"
+            placeholder="Full Name *"
+            value={formData.name}
+            onChange={handleInputChange}
+            className={`p-3 border rounded-lg w-full bg-white ${stepErrors.name ? 'border-red-500' : 'border-gray-300'}`}
+          />
+          {stepErrors.name && <p className="text-xs text-red-500 mt-1">{stepErrors.name}</p>}
+        </div>
+
+        <div>
+          <input
+            name="email"
+            type="email"
+            placeholder="Email Address *"
+            value={formData.email}
+            onChange={handleInputChange}
+            className={`p-3 border rounded-lg w-full bg-white ${stepErrors.email ? 'border-red-500' : 'border-gray-300'}`}
+          />
+          {stepErrors.email && <p className="text-xs text-red-500 mt-1">{stepErrors.email}</p>}
+        </div>
+
+        <div>
+          <input
+            name="contact"
+            type="tel"
+            placeholder="Phone Number *"
+            value={formData.contact}
+            onChange={handleInputChange}
+            className={`p-3 border rounded-lg w-full bg-white ${stepErrors.contact ? 'border-red-500' : 'border-gray-300'}`}
+          />
+          {stepErrors.contact && <p className="text-xs text-red-500 mt-1">{stepErrors.contact}</p>}
+        </div>
+
+        <div>
+          <textarea
+            name="address"
+            placeholder="Full Address (House No, Street, Landmark) *"
+            value={formData.address}
+            onChange={handleInputChange}
+            rows={3}
+            className={`p-3 border rounded-lg w-full bg-white ${stepErrors.address ? 'border-red-500' : 'border-gray-300'}`}
+          />
+          {stepErrors.address && <p className="text-xs text-red-500 mt-1">{stepErrors.address}</p>}
+        </div>
+
+        <div>
+          <input
+            name="pincode"
+            placeholder="Pincode *"
+            value={formData.pincode}
+            onChange={handleInputChange}
+            maxLength={6}
+            className={`p-3 border rounded-lg w-full bg-white ${stepErrors.pincode ? 'border-red-500' : 'border-gray-300'}`}
+          />
+          {stepErrors.pincode && <p className="text-xs text-red-500 mt-1">{stepErrors.pincode}</p>}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <input
+              name="city"
+              placeholder="City *"
+              value={formData.city}
+              onChange={handleInputChange}
+              className={`p-3 border rounded-lg w-full bg-white ${stepErrors.city ? 'border-red-500' : 'border-gray-300'}`}
+            />
+            {stepErrors.city && <p className="text-xs text-red-500 mt-1">{stepErrors.city}</p>}
+          </div>
+          <div>
+            <input
+              name="state"
+              placeholder="State *"
+              value={formData.state}
+              onChange={handleInputChange}
+              className={`p-3 border rounded-lg w-full bg-white ${stepErrors.state ? 'border-red-500' : 'border-gray-300'}`}
+            />
+            {stepErrors.state && <p className="text-xs text-red-500 mt-1">{stepErrors.state}</p>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Mobile Step 2: Payment Method
+  const renderPaymentStep = () => (
+    <div className="space-y-4">
+      <h2 className="text-xl font-bold text-heritage flex items-center gap-2">
+        <Wallet size={20} className="text-copper" />
+        Payment Method
+      </h2>
+
+      <div className="space-y-3">
+        <label
+          className={`flex items-center gap-3 p-4 border-2 rounded-lg cursor-pointer transition-colors ${paymentMethod === 'online' ? 'border-copper bg-copper/5' : 'border-gray-200 bg-white'
+            }`}
+        >
+          <input
+            type="radio"
+            name="payment"
+            value="online"
+            checked={paymentMethod === 'online'}
+            onChange={() => setPaymentMethod('online')}
+            className="w-5 h-5 text-copper"
+          />
+          <div className="flex-1">
+            <div className="font-semibold text-heritage">Online Payment</div>
+            <div className="text-xs text-matte-brown">UPI, Credit/Debit Cards, Net Banking</div>
+          </div>
+          <CreditCard size={24} className="text-copper" />
+        </label>
+
+        <label
+          className={`flex items-center gap-3 p-4 border-2 rounded-lg cursor-pointer transition-colors ${paymentMethod === 'cod' ? 'border-copper bg-copper/5' : 'border-gray-200 bg-white'
+            }`}
+        >
+          <input
+            type="radio"
+            name="payment"
+            value="cod"
+            checked={paymentMethod === 'cod'}
+            onChange={() => setPaymentMethod('cod')}
+            className="w-5 h-5 text-copper"
+          />
+          <div className="flex-1">
+            <div className="font-semibold text-heritage">Cash on Delivery</div>
+            <div className="text-xs text-matte-brown">+₹{COD_CHARGE} handling charges</div>
+          </div>
+          <Truck size={24} className="text-copper" />
+        </label>
+      </div>
+
+      {/* Coupon Section */}
+      <div className="pt-4 border-t border-copper/20 mt-4">
+        <h3 className="font-semibold text-heritage mb-3 flex items-center gap-2">
+          <Tag size={18} className="text-copper" />
+          Have a Coupon?
+        </h3>
+        <div className="flex gap-2">
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={couponCode}
+              onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+              placeholder="Enter code"
+              className="w-full p-3 border border-gray-300 rounded-lg uppercase bg-white"
+              disabled={!!appliedCoupon}
+            />
+          </div>
+          {appliedCoupon ? (
+            <button
+              onClick={() => { setAppliedCoupon(null); setCouponCode(''); }}
+              className="px-4 py-3 bg-gray-200 text-gray-700 font-semibold rounded-lg"
+            >
+              Remove
+            </button>
+          ) : (
+            <button
+              onClick={handleApplyCoupon}
+              className="px-4 py-3 bg-copper text-white font-semibold rounded-lg"
+              disabled={!couponCode}
+            >
+              Apply
+            </button>
+          )}
+        </div>
+        {couponError && <p className="text-xs text-red-500 mt-1">{couponError}</p>}
+        {appliedCoupon && (
+          <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+            <Check size={12} /> Coupon applied! You save ₹{discountAmount.toLocaleString()}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+
+  // Mobile Step 3: Review & Pay
+  const renderReviewStep = () => (
+    <div className="space-y-4">
+      <h2 className="text-xl font-bold text-heritage flex items-center gap-2">
+        <ShoppingBag size={20} className="text-copper" />
+        Order Summary
+      </h2>
+
+      {/* Delivery Address Summary */}
+      <div className="bg-white p-4 rounded-lg border border-copper/20">
+        <div className="flex justify-between items-start mb-2">
+          <h3 className="font-semibold text-heritage text-sm">Delivering to</h3>
+          <button onClick={() => setCurrentStep(1)} className="text-xs text-copper font-semibold">Edit</button>
+        </div>
+        <p className="text-sm text-matte-brown">{formData.name}</p>
+        <p className="text-xs text-matte-brown">{formData.address}</p>
+        <p className="text-xs text-matte-brown">{formData.city}, {formData.state} - {formData.pincode}</p>
+        <p className="text-xs text-matte-brown mt-1">📞 {formData.contact}</p>
+      </div>
+
+      {/* Payment Method Summary */}
+      <div className="bg-white p-4 rounded-lg border border-copper/20">
+        <div className="flex justify-between items-start mb-2">
+          <h3 className="font-semibold text-heritage text-sm">Payment</h3>
+          <button onClick={() => setCurrentStep(2)} className="text-xs text-copper font-semibold">Edit</button>
+        </div>
+        <p className="text-sm text-matte-brown flex items-center gap-2">
+          {paymentMethod === 'cod' ? <Truck size={16} /> : <CreditCard size={16} />}
+          {paymentMethod === 'cod' ? 'Cash on Delivery' : 'Online Payment'}
+        </p>
+      </div>
+
+      {/* Products */}
+      <div className="bg-white p-4 rounded-lg border border-copper/20">
+        <h3 className="font-semibold text-heritage text-sm mb-3">Items ({displayItems.length})</h3>
+        <div className="space-y-3 max-h-48 overflow-y-auto">
+          {cartItems.map((item, i) => (
+            <div key={i} className="flex gap-3">
+              <div className="relative w-14 h-14 flex-shrink-0 bg-gray-100 rounded overflow-hidden">
+                {item.image ? (
+                  <Image src={item.image} alt={item.productName} fill className="object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-gray-300">
+                    <ShoppingBag size={16} />
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-heritage truncate">{item.productName || item.name}</p>
+                <p className="text-xs text-matte-brown">Qty: {item.quantity}</p>
+                <p className="text-sm font-semibold text-heritage">₹{(item.variant.price * item.quantity).toLocaleString()}</p>
+              </div>
+            </div>
+          ))}
+          {orderDetails && (
+            <div className="flex gap-3">
+              <div className="relative w-14 h-14 flex-shrink-0 bg-gray-100 rounded overflow-hidden">
+                {orderDetails.image ? (
+                  <Image src={orderDetails.image} alt={orderDetails.productName} fill className="object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-gray-300">
+                    <ShoppingBag size={16} />
+                  </div>
+                )}
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-heritage truncate">{orderDetails.productName}</p>
+                <p className="text-xs text-matte-brown">Qty: {orderDetails.quantity}</p>
+                <p className="text-sm font-semibold text-heritage">₹{orderDetails.amount.toLocaleString()}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Price Breakdown */}
+      <div className="bg-white p-4 rounded-lg border border-copper/20">
+        <div className="space-y-2 text-sm">
+          <div className="flex justify-between text-matte-brown">
+            <span>Subtotal</span>
+            <span>₹{totalAmount.toLocaleString()}</span>
+          </div>
+          {paymentMethod === 'cod' && (
+            <div className="flex justify-between text-matte-brown">
+              <span>COD Charges</span>
+              <span>₹{COD_CHARGE}</span>
+            </div>
+          )}
+          {appliedCoupon && (
+            <div className="flex justify-between text-green-600 font-medium">
+              <span>Discount</span>
+              <span>-₹{discountAmount.toLocaleString()}</span>
+            </div>
+          )}
+          <div className="flex justify-between font-bold text-heritage text-lg pt-2 border-t border-dashed mt-2">
+            <span>Total</span>
+            <span>₹{Math.round(finalAmount).toLocaleString()}</span>
+          </div>
+        </div>
+      </div>
+
+      {error && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm">{error}</div>}
+    </div>
+  );
+
   return (
     <>
       <Head>
         <title>Checkout - Varaha Jewels</title>
       </Head>
       <Script src="https://checkout.razorpay.com/v1/checkout.js" />
-      <Header />
 
-      <main className="min-h-screen bg-warm-sand py-16">
+      {/* Mobile Header */}
+      <div className="lg:hidden sticky top-0 z-50 bg-white border-b border-copper/20 px-4 py-3">
+        <div className="flex items-center gap-3">
+          <button onClick={() => currentStep > 1 ? prevStep() : router.back()} className="p-2 -ml-2">
+            <ChevronLeft size={24} className="text-heritage" />
+          </button>
+          <h1 className="text-lg font-bold text-heritage">Checkout</h1>
+        </div>
+      </div>
+
+      {/* Desktop Header */}
+      <div className="hidden lg:block">
+        <Header />
+      </div>
+
+      <main className="min-h-screen bg-warm-sand pb-24 lg:pb-0 lg:py-16">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <h1 className="text-4xl font-royal font-bold text-heritage mb-8">Checkout</h1>
+          {/* Desktop Title */}
+          <h1 className="hidden lg:block text-4xl font-royal font-bold text-heritage mb-8">Checkout</h1>
 
-          <div className="grid lg:grid-cols-2 gap-12">
+          {/* Mobile Step Indicator */}
+          <div className="lg:hidden py-4">
+            {renderStepIndicator()}
+          </div>
+
+          {/* Mobile Steps */}
+          <div className="lg:hidden">
+            {currentStep === 1 && renderAddressStep()}
+            {currentStep === 2 && renderPaymentStep()}
+            {currentStep === 3 && renderReviewStep()}
+          </div>
+
+          {/* Desktop Layout (unchanged side-by-side) */}
+          <div className="hidden lg:grid lg:grid-cols-2 gap-12">
             {/* Form Section */}
             <div className="bg-white p-8 rounded-sm border border-copper/30">
               <h2 className="text-2xl font-bold text-heritage mb-6">Details</h2>
@@ -389,7 +749,7 @@ export default function Checkout() {
                 </div>
 
                 <button type="submit" disabled={isLoading} className="w-full py-4 bg-copper text-white font-bold rounded hover:bg-heritage transition-colors disabled:opacity-50">
-                  {isLoading ? 'Processing...' : `Pay ₹${finalAmount}`}
+                  {isLoading ? 'Processing...' : `Pay ₹${Math.round(finalAmount).toLocaleString()}`}
                 </button>
               </form>
             </div>
@@ -403,12 +763,7 @@ export default function Checkout() {
                   <div key={i} className="flex gap-4 border-b border-copper/10 pb-4 last:border-0">
                     <div className="relative w-16 h-16 sm:w-20 sm:h-20 flex-shrink-0 bg-gray-100 rounded border border-gray-200 overflow-hidden">
                       {item.image ? (
-                        <Image
-                          src={item.image}
-                          alt={item.productName}
-                          fill
-                          className="object-cover"
-                        />
+                        <Image src={item.image} alt={item.productName} fill className="object-cover" />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-gray-300">
                           <ShoppingBag size={20} />
@@ -433,12 +788,7 @@ export default function Checkout() {
                   <div className="flex gap-4 border-b border-copper/10 pb-4 last:border-0">
                     <div className="relative w-16 h-16 sm:w-20 sm:h-20 flex-shrink-0 bg-gray-100 rounded border border-gray-200 overflow-hidden">
                       {orderDetails.image ? (
-                        <Image
-                          src={orderDetails.image}
-                          alt={orderDetails.productName}
-                          fill
-                          className="object-cover"
-                        />
+                        <Image src={orderDetails.image} alt={orderDetails.productName} fill className="object-cover" />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-gray-300">
                           <ShoppingBag size={20} />
@@ -528,7 +878,45 @@ export default function Checkout() {
           </div>
         </div>
       </main>
-      <Footer />
+
+      {/* Mobile Sticky Bottom Navigation */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-copper/20 px-4 py-3 z-40 safe-area-inset-bottom">
+        <div className="flex items-center gap-3">
+          {currentStep > 1 && (
+            <button
+              onClick={prevStep}
+              className="flex items-center justify-center gap-1 px-4 py-3 border-2 border-copper/50 rounded-lg text-heritage font-semibold"
+            >
+              <ArrowLeft size={18} />
+              Back
+            </button>
+          )}
+
+          {currentStep < 3 ? (
+            <button
+              onClick={nextStep}
+              className="flex-1 flex items-center justify-center gap-2 py-3 bg-copper text-white font-bold rounded-lg"
+            >
+              Continue
+              <ArrowRight size={18} />
+            </button>
+          ) : (
+            <button
+              onClick={handleSubmit}
+              disabled={isLoading}
+              className="flex-1 flex items-center justify-center gap-2 py-3 bg-copper text-white font-bold rounded-lg disabled:opacity-50"
+            >
+              {isLoading ? 'Processing...' : `Pay ₹${Math.round(finalAmount).toLocaleString()}`}
+              <Lock size={16} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Desktop Footer */}
+      <div className="hidden lg:block">
+        <Footer />
+      </div>
     </>
   );
 }

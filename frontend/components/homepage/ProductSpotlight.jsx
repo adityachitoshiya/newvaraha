@@ -19,26 +19,37 @@ export default function ProductSpotlight() {
   const fetchFeaturedProducts = async () => {
     try {
       const API_URL = getApiUrl();
-      console.log("Fetching spotlight from:", API_URL);
-      const res = await fetch(`${API_URL}/api/products`);
-      if (res.ok) {
-        const data = await res.json();
-        console.log("Spotlight data:", data);
+      const [productsRes, settingsRes] = await Promise.all([
+        fetch(`${API_URL}/api/products`),
+        fetch(`${API_URL}/api/settings`)
+      ]);
 
-        // First try featured/bestseller products
-        const featured = data.filter(p => p.tag === 'Featured' || p.tag === 'Bestseller' || p.premium).slice(0, 5);
+      if (productsRes.ok) {
+        const data = await productsRes.json();
+        let spotlightSource = 'featured'; // Default
 
-        // If no featured products, show New Arrivals (sort by newest first)
-        if (featured.length === 0 && data.length > 0) {
-          // Sort products by ID (assuming higher ID = newer product)
-          // Or you can add a 'created_at' field to products
-          const newArrivals = [...data].reverse().slice(0, 5);
-          setProducts(newArrivals);
-        } else if (featured.length > 0) {
-          setProducts(featured);
-        } else {
-          setProducts(data.slice(0, 3)); // Fallback to first 3
+        if (settingsRes.ok) {
+          const settings = await settingsRes.json();
+          if (settings.spotlight_source) {
+            spotlightSource = settings.spotlight_source;
+          }
         }
+
+        let displayedProducts = [];
+
+        if (spotlightSource === 'new_arrivals') {
+          // New Arrivals: Sort by ID descending (newest first)
+          displayedProducts = [...data].sort((a, b) => b.id - a.id).slice(0, 5);
+        } else {
+          // Default: Featured
+          displayedProducts = data.filter(p => p.tag === 'Featured' || p.tag === 'Bestseller' || p.premium).slice(0, 5);
+          // Fallback if no featured products
+          if (displayedProducts.length === 0) {
+            displayedProducts = data.slice(0, 3);
+          }
+        }
+
+        setProducts(displayedProducts);
       } else {
         setError("Failed to load products");
       }
@@ -91,7 +102,7 @@ export default function ProductSpotlight() {
         </div>
 
         {/* Main Showcase */}
-        <div className={`relative transition - all duration - 1000 delay - 200 ${isVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95'} `}>
+        <div className={`relative transition-all duration-1000 delay-200 ${isVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}>
           <div className="grid lg:grid-cols-12 gap-8 items-center">
 
             {/* Image Area - Spans 7 cols */}
@@ -151,14 +162,14 @@ export default function ProductSpotlight() {
 
                 <div className="flex flex-col sm:flex-row gap-4">
                   <Link
-                    href={`/ product / ${currentProduct.id} `}
+                    href={`/product/${currentProduct.id}`}
                     className="flex-1 py-4 bg-heritage text-white text-center rounded-lg font-medium hover:bg-copper transition-colors flex items-center justify-center gap-2 group"
                   >
                     Shop Now
                     <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
                   </Link>
                   <Link
-                    href={`/ product / ${currentProduct.id} `}
+                    href={`/product/${currentProduct.id}`}
                     className="px-6 py-4 border border-heritage/20 text-heritage rounded-lg hover:bg-heritage/5 transition-colors flex items-center justify-center"
                   >
                     <ShoppingBag size={20} />
@@ -173,7 +184,7 @@ export default function ProductSpotlight() {
                   <button
                     key={p.id}
                     onClick={() => setCurrentIndex(idx)}
-                    className={`flex - shrink - 0 w - 20 h - 20 rounded - lg overflow - hidden border - 2 transition - all ${idx === currentIndex ? 'border-copper scale-105 shadow-md' : 'border-transparent opacity-60 hover:opacity-100'} `}
+                    className={`flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 transition-all ${idx === currentIndex ? 'border-copper scale-105 shadow-md' : 'border-transparent opacity-60 hover:opacity-100'}`}
                   >
                     <img
                       src={p.image}

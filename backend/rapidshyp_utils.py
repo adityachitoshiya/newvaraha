@@ -52,7 +52,7 @@ class RapidShypClient:
             "total_order_value": float(value),
             "weight": float(weight)
         }
-        return self._make_request("POST", "serviceability_check", payload=payload)
+        return self._make_request("POST", "serviceabilty_check", payload=payload)
 
     def create_forward_order_wrapper(self, order_data, pickup_location=None):
         """
@@ -106,7 +106,6 @@ class RapidShypClient:
             "billingAddress": billing_address,
             "orderItems": order_items,
             "paymentMethod": "COD" if order_data.get("payment_method") == "COD" else "PREPAID",
-            "totalOrderValue": float(order_data.get("total_amount", 0)),
             "packageDetails": {
                 "packageLength": order_data.get("length", 10),
                 "packageBreadth": order_data.get("breadth", 10),

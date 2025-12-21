@@ -303,7 +303,7 @@ export default function AdminLayout({ children }) {
 
                             {/* Dropdown */}
                             {showNotifications && (
-                                <div className="absolute right-0 mt-2 w-72 md:w-80 bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden z-50">
+                                <div className="absolute right-0 mt-2 w-80 md:w-96 bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden z-50">
                                     <div className="p-3 border-b border-gray-50 flex justify-between items-center">
                                         <h3 className="font-semibold text-gray-800">Notifications</h3>
                                         <button onClick={fetchNotifications} className="text-xs text-copper">Refresh</button>

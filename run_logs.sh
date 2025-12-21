@@ -36,6 +36,8 @@ trap cleanup SIGINT SIGTERM
 
 # Kill old processes
 echo -e "${YELLOW}🔄 Cleaning up old processes...${NC}"
+lsof -ti:8000 | xargs kill -9 2>/dev/null
+lsof -ti:3000 | xargs kill -9 2>/dev/null
 pkill -f uvicorn 2>/dev/null
 pkill -f "next-server" 2>/dev/null
 sleep 1

@@ -141,6 +141,7 @@ class StoreSettings(SQLModel, table=True):
     logo_url: str = "/varaha-assets/logo.png"
     show_full_page_countdown: bool = True
     is_maintenance_mode: bool = False
+    spotlight_source: str = "featured"  # 'featured' or 'new_arrivals'
 
 
 
@@ -240,5 +241,11 @@ class MetalRates(SQLModel, table=True):
     gold_rate: float = Field(default=124040.0)  # 22 Carat per 10g
     silver_rate: float = Field(default=208900.0)  # 999 Purity per 1kg
     updated_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_by: Optional[str] = None  # Admin username
+
+class SystemSetting(SQLModel, table=True):
+    key: str = Field(primary_key=True)
+    value: str
+    description: Optional[str] = None
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+  # Admin username
 

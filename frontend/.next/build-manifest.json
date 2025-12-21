@@ -33,19 +33,8 @@
       "static/chunks/[next]_entry_page-loader_ts_d2b2a3._.js",
       "static/chunks/[next]_entry_page-loader_ts_2b92f8._.js"
     ],
-    "/_error": [
-      "static/chunks/[root of the server]__bf43ea._.js",
-      "static/chunks/node_modules_react_b2385d._.js",
-      "static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js",
-      "static/chunks/node_modules_react-dom_f14d04._.js",
-      "static/chunks/node_modules_a6e291._.js",
-      "static/chunks/[turbopack]_dev_client_38d6c6._.js",
-      "static/chunks/node_modules_next_dist_pages_23b6c3._.js",
-      "static/chunks/[next]_entry_page-loader_ts_cff271._.js",
-      "static/chunks/[next]_entry_page-loader_ts_0c3ead._.js"
-    ],
-    "/story": [
-      "static/chunks/[root of the server]__2b1aab._.js",
+    "/shop": [
+      "static/chunks/[root of the server]__bf76be._.js",
       "static/chunks/node_modules_next_dist_compiled_732b64._.js",
       "static/chunks/node_modules_next_dist_shared_lib_3a9454._.js",
       "static/chunks/node_modules_next_dist_client_1bf224._.js",
@@ -57,109 +46,46 @@
       "static/chunks/node_modules_@supabase_auth-js_dist_module_105bee._.js",
       "static/chunks/node_modules_@supabase_storage-js_dist_index_mjs_12daf3._.js",
       "static/chunks/node_modules_@supabase_realtime-js_dist_module_6c5d4b._.js",
-      "static/chunks/node_modules_546a3e._.js",
-      "static/chunks/node_modules_next_dist_pages_6592eb._.js",
-      "static/chunks/[next]_entry_page-loader_ts_f678ac._.js",
-      "static/chunks/[next]_entry_page-loader_ts_4cdb56._.js"
+      "static/chunks/node_modules_0ac09e._.js",
+      "static/chunks/node_modules_next_dist_pages_31032d._.js",
+      "static/chunks/[next]_entry_page-loader_ts_bcc698._.js",
+      "static/chunks/[next]_entry_page-loader_ts_e0d95e._.js"
     ],
-    "/admin": [
-      "static/chunks/[root of the server]__437f26._.js",
-      "static/chunks/node_modules_next_c089a1._.js",
+    "/product/[id]": [
+      "static/chunks/[root of the server]__c12785._.js",
+      "static/chunks/node_modules_next_dist_compiled_5eb400._.js",
+      "static/chunks/node_modules_next_dist_shared_lib_3a9454._.js",
+      "static/chunks/node_modules_next_dist_client_1bf224._.js",
+      "static/chunks/node_modules_next_dist_ed27f8._.js",
+      "static/chunks/node_modules_next_599f69._.js",
       "static/chunks/node_modules_react_1cad9b._.js",
       "static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js",
       "static/chunks/node_modules_react-dom_f14d04._.js",
-      "static/chunks/node_modules_599b95._.js",
-      "static/chunks/node_modules_next_dist_pages_ed1914._.js",
-      "static/chunks/[next]_entry_page-loader_ts_d47737._.js",
-      "static/chunks/[next]_entry_page-loader_ts_524bae._.js"
+      "static/chunks/node_modules_@supabase_auth-js_dist_module_105bee._.js",
+      "static/chunks/node_modules_@supabase_storage-js_dist_index_mjs_12daf3._.js",
+      "static/chunks/node_modules_@supabase_realtime-js_dist_module_6c5d4b._.js",
+      "static/chunks/node_modules_584c48._.js",
+      "static/chunks/node_modules_next_dist_pages_092700._.js",
+      "static/chunks/[next]_entry_page-loader_ts_183243._.js",
+      "static/chunks/[next]_entry_page-loader_ts_07db8b._.js"
     ],
-    "/admin/analytics": [
-      "static/chunks/[root of the server]__d44c7f._.js",
-      "static/chunks/node_modules_next_c089a1._.js",
+    "/checkout": [
+      "static/chunks/[root of the server]__7f657d._.js",
+      "static/chunks/node_modules_next_dist_compiled_732b64._.js",
+      "static/chunks/node_modules_next_dist_shared_lib_3a9454._.js",
+      "static/chunks/node_modules_next_dist_client_1bf224._.js",
+      "static/chunks/node_modules_next_dist_ed27f8._.js",
+      "static/chunks/node_modules_next_957083._.js",
       "static/chunks/node_modules_react_1cad9b._.js",
       "static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js",
       "static/chunks/node_modules_react-dom_f14d04._.js",
-      "static/chunks/node_modules_251a99._.js",
-      "static/chunks/node_modules_next_dist_pages_df170c._.js",
-      "static/chunks/[next]_entry_page-loader_ts_701cb7._.js",
-      "static/chunks/[next]_entry_page-loader_ts_624df7._.js"
-    ],
-    "/admin/cms": [
-      "static/chunks/[root of the server]__f64c96._.js",
-      "static/chunks/node_modules_next_c089a1._.js",
-      "static/chunks/node_modules_react_1cad9b._.js",
-      "static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js",
-      "static/chunks/node_modules_react-dom_f14d04._.js",
-      "static/chunks/node_modules_123fb6._.js",
-      "static/chunks/node_modules_next_dist_pages_ee2c59._.js",
-      "static/chunks/[next]_entry_page-loader_ts_9d5077._.js",
-      "static/chunks/[next]_entry_page-loader_ts_a26118._.js"
-    ],
-    "/admin/settings": [
-      "static/chunks/[root of the server]__e414fe._.js",
-      "static/chunks/node_modules_next_c089a1._.js",
-      "static/chunks/node_modules_react_1cad9b._.js",
-      "static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js",
-      "static/chunks/node_modules_react-dom_f14d04._.js",
-      "static/chunks/node_modules_7514e1._.js",
-      "static/chunks/node_modules_next_dist_pages_e155c0._.js",
-      "static/chunks/[next]_entry_page-loader_ts_f217d3._.js",
-      "static/chunks/[next]_entry_page-loader_ts_0fb6e4._.js"
-    ],
-    "/admin/customers": [
-      "static/chunks/[root of the server]__1d1ba4._.js",
-      "static/chunks/node_modules_next_c089a1._.js",
-      "static/chunks/node_modules_react_1cad9b._.js",
-      "static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js",
-      "static/chunks/node_modules_react-dom_f14d04._.js",
-      "static/chunks/node_modules_6eaadd._.js",
-      "static/chunks/node_modules_next_dist_pages_3146ec._.js",
-      "static/chunks/[next]_entry_page-loader_ts_b3c44c._.js",
-      "static/chunks/[next]_entry_page-loader_ts_bf83ce._.js"
-    ],
-    "/admin/coupons": [
-      "static/chunks/[root of the server]__b40138._.js",
-      "static/chunks/node_modules_next_c089a1._.js",
-      "static/chunks/node_modules_react_1cad9b._.js",
-      "static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js",
-      "static/chunks/node_modules_react-dom_f14d04._.js",
-      "static/chunks/node_modules_c41e84._.js",
-      "static/chunks/node_modules_next_dist_pages_2a6c43._.js",
-      "static/chunks/[next]_entry_page-loader_ts_d12a6d._.js",
-      "static/chunks/[next]_entry_page-loader_ts_2e4aca._.js"
-    ],
-    "/admin/products": [
-      "static/chunks/[root of the server]__1ed384._.js",
-      "static/chunks/node_modules_next_c089a1._.js",
-      "static/chunks/node_modules_react_1cad9b._.js",
-      "static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js",
-      "static/chunks/node_modules_react-dom_f14d04._.js",
-      "static/chunks/node_modules_ee0176._.js",
-      "static/chunks/node_modules_next_dist_pages_8ace56._.js",
-      "static/chunks/[next]_entry_page-loader_ts_791fb6._.js",
-      "static/chunks/[next]_entry_page-loader_ts_e9e4a4._.js"
-    ],
-    "/admin/orders": [
-      "static/chunks/[root of the server]__eb171c._.js",
-      "static/chunks/node_modules_next_c089a1._.js",
-      "static/chunks/node_modules_react_1cad9b._.js",
-      "static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js",
-      "static/chunks/node_modules_react-dom_f14d04._.js",
-      "static/chunks/node_modules_1b5b0c._.js",
-      "static/chunks/node_modules_next_dist_pages_4ece09._.js",
-      "static/chunks/[next]_entry_page-loader_ts_7dd130._.js",
-      "static/chunks/[next]_entry_page-loader_ts_43ba85._.js"
-    ],
-    "/admin/metal-rates": [
-      "static/chunks/node_modules_next_44269a._.js",
-      "static/chunks/node_modules_react_1cad9b._.js",
-      "static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js",
-      "static/chunks/node_modules_react-dom_f14d04._.js",
-      "static/chunks/node_modules_b8e92b._.js",
-      "static/chunks/[root of the server]__1fb540._.js",
-      "static/chunks/node_modules_next_dist_pages_690fab._.js",
-      "static/chunks/[next]_entry_page-loader_ts_f0f6e5._.js",
-      "static/chunks/[next]_entry_page-loader_ts_60eb42._.js"
+      "static/chunks/node_modules_@supabase_auth-js_dist_module_105bee._.js",
+      "static/chunks/node_modules_@supabase_storage-js_dist_index_mjs_12daf3._.js",
+      "static/chunks/node_modules_@supabase_realtime-js_dist_module_6c5d4b._.js",
+      "static/chunks/node_modules_96b62d._.js",
+      "static/chunks/node_modules_next_dist_pages_022a3a._.js",
+      "static/chunks/[next]_entry_page-loader_ts_d03a01._.js",
+      "static/chunks/[next]_entry_page-loader_ts_f57c3f._.js"
     ]
   },
   "devFiles": [],

@@ -5,7 +5,8 @@ import Image from 'next/image';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
 import { getApiUrl } from '../lib/config';
-import { Search, SlidersHorizontal, Grid, List, Heart, ChevronDown } from 'lucide-react';
+import { Search, SlidersHorizontal, Grid, List, Heart, ChevronDown, ShoppingBag } from 'lucide-react';
+import { useCart } from '../context/CartContext';
 
 export default function Heritage() {
   // Initialize products empty
@@ -26,6 +27,9 @@ export default function Heritage() {
 
   // Wishlist state
   const [wishlist, setWishlist] = useState([]);
+
+  // Cart Hook
+  const { addToCart } = useCart();
 
   useEffect(() => {
     fetchProducts();
@@ -141,6 +145,16 @@ export default function Heritage() {
     }
     localStorage.setItem('wishlist', JSON.stringify(wishlistArray));
     setWishlist(wishlistArray);
+  };
+
+  const handleAddToCart = (product) => {
+    const variant = {
+      sku: product.id,
+      price: product.price,
+      name: product.name,
+      image: product.image
+    };
+    addToCart(product, variant, 1);
   };
 
   const isInWishlist = (productId) => wishlist.some(item => item.id === productId);
@@ -278,30 +292,45 @@ export default function Heritage() {
               ) : (
                 <div className={viewMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6' : 'space-y-6'}>
                   {filteredProducts.map((product) => (
-                    <div key={product.id} className={`group bg-white border border-copper/30 rounded-sm overflow-hidden hover:shadow-xl transition-all duration-300 ${viewMode === 'list' ? 'flex gap-6' : ''}`}>
-                      <div className={`relative overflow-hidden ${viewMode === 'list' ? 'w-48 flex-shrink-0' : 'aspect-square'}`}>
-                        <Image
-                          src={product.image}
-                          alt={product.name}
-                          width={400}
-                          height={400}
-                          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                          onError={(e) => { e.target.srcset = ''; e.target.src = '/varaha-assets/logo.png'; }}
-                        />
+                    <div key={product.id} className={`group bg-white border border-copper/30 rounded-sm overflow-hidden hover:shadow-xl transition-all duration-300 flex flex-col ${viewMode === 'list' ? 'sm:flex-row' : 'h-full'}`}>
+                      <div className={`relative overflow-hidden ${viewMode === 'list' ? 'w-48 h-48 sm:h-auto flex-shrink-0' : 'aspect-square'}`}>
+                        <Link href={`/product/${product.id}`} className="block h-full cursor-pointer">
+                          <Image
+                            src={product.image}
+                            alt={product.name}
+                            width={400}
+                            height={400}
+                            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                            onError={(e) => { e.target.srcset = ''; e.target.src = '/varaha-assets/logo.png'; }}
+                          />
+                        </Link>
                         {product.tag && <span className="absolute top-3 left-3 px-3 py-1 bg-copper text-warm-sand text-xs font-bold rounded-full">{product.tag}</span>}
-                        <button onClick={() => toggleWishlist(product.id, product.name)} className="absolute top-3 right-3 p-2 bg-white/90 rounded-full hover:bg-white transition-colors">
+                        <button onClick={() => toggleWishlist(product.id, product.name)} className="absolute top-3 right-3 p-2 bg-white/90 rounded-full hover:bg-white transition-colors z-10">
                           <Heart size={20} className={isInWishlist(product.id) ? 'fill-red-500 text-red-500' : 'text-heritage'} />
                         </button>
                       </div>
-                      <div className="p-6 flex-1">
-                        <h3 className="text-lg font-royal font-bold text-heritage mb-1">{product.name}</h3>
-                        <p className="text-sm text-heritage/60">{product.category} • {product.metal}</p>
-                        <div className="mt-4">
-                          {product.price ? <p className="text-2xl font-bold text-heritage">₹{product.price.toLocaleString('en-IN')}</p> : <p className="text-lg font-semibold text-copper">Price on Request</p>}
+                      <div className="p-6 flex flex-col flex-1">
+                        <div className="flex-grow">
+                          <Link href={`/product/${product.id}`} className="block group-hover:text-copper transition-colors">
+                            <h3 className="text-lg font-royal font-bold text-heritage mb-1 line-clamp-2">{product.name}</h3>
+                          </Link>
+                          <p className="text-sm text-heritage/60">{product.category} • {product.metal}</p>
+                          <div className="mt-4 mb-4">
+                            {product.price ? <p className="text-2xl font-bold text-heritage">₹{product.price.toLocaleString('en-IN')}</p> : <p className="text-lg font-semibold text-copper">Price on Request</p>}
+                          </div>
                         </div>
-                        <Link href={`/product/${product.id}`} className="mt-4 w-full px-6 py-3 bg-copper text-warm-sand font-semibold rounded-sm flex items-center justify-center gap-2 hover:bg-heritage transition-all">
-                          View Details <ChevronDown size={18} className="rotate-[-90deg]" />
-                        </Link>
+                        {product.price ? (
+                          <button
+                            onClick={() => handleAddToCart(product)}
+                            className="mt-auto w-full px-6 py-3 bg-heritage text-warm-sand font-semibold rounded-sm flex items-center justify-center gap-2 hover:bg-copper transition-all group-hover:shadow-md"
+                          >
+                            Add to Cart <ShoppingBag size={18} />
+                          </button>
+                        ) : (
+                          <Link href={`/product/${product.id}`} className="mt-auto w-full px-6 py-3 bg-copper text-warm-sand font-semibold rounded-sm flex items-center justify-center gap-2 hover:bg-heritage transition-all group-hover:shadow-md">
+                            View Details <ShoppingBag size={18} />
+                          </Link>
+                        )}
                       </div>
                     </div>
                   ))}

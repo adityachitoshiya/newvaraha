@@ -8,9 +8,12 @@ env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 # Default to SQLite for local development
-sqlite_file_name = "database/database.db" # Adjusted path relative to project root or absolute if running from root
+sqlite_file_name = "database.db" # Database is now in the same folder as backend app
 if os.getcwd().endswith('backend'):
-    sqlite_file_name = "../database/database.db"
+    sqlite_file_name = "database.db"
+else:
+    # If running from root, it's inside backend/
+    sqlite_file_name = "backend/database.db"
 
 sqlite_url = f"sqlite:///{sqlite_file_name}"
 

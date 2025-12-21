@@ -40,24 +40,36 @@ export default function Orders() {
         if (!confirm('Are you sure you want to ship this order with RapidShyp?')) return;
 
         try {
-            // Dynamic host for API
             const API_URL = getApiUrl();
-            const res = await fetch(`${API_URL}/api/ship-order`, {
+            // Using the admin-specific endpoint
+            const res = await fetch(`${API_URL}/api/admin/orders/${orderId}/ship`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ orderId: orderId.toString() }) // Ensure string ID if needed by backend, but backend takes int ID in body? wait backend takes "orderId" string 
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({}) // Send empty object for defaults
             });
 
+            const data = await res.json();
+
             if (res.ok) {
-                alert('Order shipped successfully!');
-                fetchOrders(); // Refresh
-                setSelectedOrder(null);
+                const shipment = data.shipment;
+                // Handle case where keys might be camelCase (RapidShyp) or snake_case (our mock)
+                // Mock: courierName, awb
+                // Real: courierName, awb
+                if (shipment.courierName === 'Mock Courier') {
+                    alert(`Order shipped (SIMULATION). AWB: ${shipment.awb}`);
+                } else {
+                    alert(`Order shipped successfully via ${shipment.courierName}! AWB: ${shipment.awb}`);
+                }
+                fetchOrders(); // Refresh list to show new status
+                setSelectedOrder(null); // Close modal
             } else {
-                const err = await res.json();
-                alert(`Failed: ${err.detail}`);
+                alert(`Failed to ship order: ${data.detail || 'Unknown error'}`);
             }
         } catch (e) {
-            alert(`Error: ${e.message}`);
+            console.error(e);
+            alert(`Error processing shipping request: ${e.message}`);
         }
     };
 

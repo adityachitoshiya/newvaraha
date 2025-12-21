@@ -10,13 +10,15 @@ from models import (
     Product, Order, AdminUser, PaymentGateway, Notification, Customer, Review, 
     Coupon, VisitorLog, ActiveVisitor, HeroSlide, CreatorVideo, StoreSettings, 
     Cart, CartItem, Wishlist, Address, ProductVariant, Inventory, OrderReturn,
-    MetalRates
+    MetalRates, SystemSetting
 )
 from notifications import send_order_notifications
 from rapidshyp_utils import rapidshyp_client
 from auth_utils import verify_password, create_access_token
-from sqlmodel import Session, select, func, col, or_
-
+from sqlmodel import Session, select, func, col, or_, SQLModel
+from datetime import datetime, timedelta
+import json
+import time
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from fastapi import FastAPI, Depends, HTTPException, Request
@@ -635,7 +637,7 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
         
-    if order.shipment_id:
+    if order.shipping_id:
          raise HTTPException(status_code=400, detail="Order already shipped")
 
     # Prepare data for RapidShyp
@@ -645,6 +647,32 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
     except:
         items = []
 
+    # Check RapidShyp Toggle
+    setting = session.get(SystemSetting, "rapidshyp_enabled")
+    rapidshyp_enabled = setting.value.lower() == "true" if setting else False
+
+    if not rapidshyp_enabled:
+        # Simulate Shipment
+        print("RapidShyp Disabled: Simulating Shipment")
+        mock_shipment_id = f"MOCK-SHIP-{int(time.time())}"
+        mock_awb = f"MOCK-AWB-{int(time.time())}"
+        order.shipping_id = mock_shipment_id
+        order.awb_number = mock_awb
+        order.courier_name = "Mock Courier"
+        order.status = "Shipped"
+        
+        status_update = {"status": "Shipped", "timestamp": datetime.utcnow().isoformat(), "comment": "Order shipped via Mock Courier"}
+        status_history = json.loads(order.status_history) if order.status_history else []
+        status_history.append(status_update)
+        order.status_history = json.dumps(status_history)
+        
+        session.add(order)
+        session.commit()
+        session.refresh(order)
+            
+        return {"ok": True, "shipment": {"shipmentId": mock_shipment_id, "awb": mock_awb, "courierName": "Mock Courier"}}
+
+    # Prepare data for RapidShyp
     order_data = {
         "orderId": order.order_id,
         "orderDate": order.created_at.strftime("%Y-%m-%d"),
@@ -672,7 +700,7 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
         shipments = response.get("shipment", [])
         if shipments:
             sh = shipments[0]
-            order.shipment_id = sh.get("shipmentId")
+            order.shipping_id = sh.get("shipmentId")
             order.awb_number = sh.get("awb")
             order.courier_name = sh.get("courierName")
             order.label_url = sh.get("labelURL")
@@ -1456,6 +1484,7 @@ def update_store_settings(new_settings: StoreSettings, session: Session = Depend
     settings.logo_url = new_settings.logo_url
     settings.show_full_page_countdown = new_settings.show_full_page_countdown
     settings.is_maintenance_mode = new_settings.is_maintenance_mode
+    settings.spotlight_source = new_settings.spotlight_source
 
     session.add(settings)
     session.commit()
@@ -2384,3 +2413,26 @@ def update_metal_rates(
         "gold_rate": rates.gold_rate,
         "silver_rate": rates.silver_rate
     }
+
+# Settings API
+@app.get("/api/settings")
+def get_settings(db: Session = Depends(get_session)):
+    settings = db.exec(select(SystemSetting)).all()
+    return {s.key: s.value for s in settings}
+
+class SettingUpdate(SQLModel):
+    key: str
+    value: str
+
+@app.post("/api/admin/settings")
+def update_setting(setting: SettingUpdate, current_user: AdminUser = Depends(get_current_user)):
+    with Session(engine) as session:
+        db_setting = session.get(SystemSetting, setting.key)
+        if not db_setting:
+            db_setting = SystemSetting(key=setting.key, value=setting.value)
+        else:
+            db_setting.value = setting.value
+            db_setting.updated_at = datetime.utcnow()
+        session.add(db_setting)
+        session.commit()
+    return {"status": "success", "key": setting.key, "value": setting.value}

@@ -14,6 +14,7 @@ export default function Header({ cartCount = 0, onCartClick }) {
   const [wishlistCount, setWishlistCount] = useState(0);
   const [user, setUser] = useState(null);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [mobileSearchQuery, setMobileSearchQuery] = useState('');
 
   const searchRef = useRef(null);
   const profileRef = useRef(null);
@@ -243,10 +244,18 @@ export default function Header({ cartCount = 0, onCartClick }) {
               <div className="relative mb-6 transform transition-all duration-300 animate-slideDown">
                 <input
                   type="text"
+                  value={mobileSearchQuery}
+                  onChange={(e) => setMobileSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && mobileSearchQuery.trim()) {
+                      setIsMobileMenuOpen(false);
+                      router.push(`/collections?search=${encodeURIComponent(mobileSearchQuery.trim())}`);
+                    }
+                  }}
                   placeholder="Search for jewelry..."
                   className="w-full px-4 py-3.5 pl-12 pr-4 border-2 border-copper/30 rounded-xl focus:outline-none focus:border-copper focus:ring-2 focus:ring-copper/20 bg-white text-heritage shadow-sm transition-all duration-200"
                 />
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-copper animate-pulse" size={20} />
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-copper" size={20} />
               </div>
 
               {/* Mobile Auth Status */}

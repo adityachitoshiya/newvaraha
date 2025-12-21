@@ -9,7 +9,6 @@ import ProductInfo from '../../components/ProductInfo';
 import StickyBuyBar from '../../components/StickyBuyBar';
 import AddToCartModal from '../../components/AddToCartModal';
 import ReviewsSection from '../../components/ReviewsSection';
-import RecommendedProducts from '../../components/RecommendedProducts';
 import Footer from '../../components/Footer';
 
 export default function ProductPage() {
@@ -21,8 +20,6 @@ export default function ProductPage() {
 
   const { addToCart, updateQuantity, removeFromCart, cartItems } = useCart();
   const [isCartModalOpen, setIsCartModalOpen] = useState(false);
-  const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
-  const [checkoutError, setCheckoutError] = useState(null);
 
   useEffect(() => {
     if (id) {
@@ -37,7 +34,6 @@ export default function ProductPage() {
       if (res.ok) {
         const data = await res.json();
 
-        // Adapt backend data to frontend structure
         // Parse additional images from JSON string
         let additionalImages = [];
         try {
@@ -67,16 +63,16 @@ export default function ProductPage() {
         const adaptedProduct = {
           id: data.id,
           title: data.name,
-          name: data.name, // Support both naming conventions
+          name: data.name,
           description: data.description,
           price: data.price,
-          images: allImages, // Complete image array with main + additional images
+          images: allImages,
           category: data.category,
-          rating: 4.8, // Mocked
-          reviewCount: 124, // Mocked
-          averageRating: 4.8, // Mocked
+          rating: 4.8,
+          reviewCount: 124,
+          averageRating: 4.8,
 
-          // Mock Variants (Single Variant based on main product)
+          // Variants
           variants: [
             {
               id: `${data.id}-default`,
@@ -87,11 +83,11 @@ export default function ProductPage() {
             }
           ],
 
-          // Pass tech specs
+          // Tech specs
           metal: data.metal,
           carat: data.carat,
           polish: data.polish,
-          stones: data.stones, // JSON string, will need parsing in display if used
+          stones: data.stones,
 
           // Mock Reviews
           reviews: [
@@ -111,7 +107,7 @@ export default function ProductPage() {
             }
           ],
 
-          recommendations: [] // We could fetch this too, but leaving empty for now
+          recommendations: []
         };
 
         setProduct(adaptedProduct);
@@ -130,10 +126,7 @@ export default function ProductPage() {
 
   // Add to Cart Handler
   const handleAddToCart = (variant, quantity) => {
-    // Add to Context (handles server sync)
     addToCart(product, variant, quantity);
-
-    // Open cart modal
     setIsCartModalOpen(true);
   };
 
@@ -147,9 +140,8 @@ export default function ProductPage() {
     removeFromCart(null, sku);
   };
 
-  // Buy Now Handler - Redirect to Checkout Page
+  // Buy Now Handler
   const handleBuyNow = (variant, quantity) => {
-    // Redirect to checkout page with product details
     router.push({
       pathname: '/checkout',
       query: {
@@ -170,60 +162,79 @@ export default function ProductPage() {
   };
 
   if (isLoading) {
-    return <div className="min-h-screen bg-warm-sand flex items-center justify-center">
-      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-copper"></div>
-    </div>;
+    return (
+      <div className="min-h-screen bg-warm-sand flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-copper"></div>
+          <p className="text-heritage">Loading...</p>
+        </div>
+      </div>
+    );
   }
 
   if (!product) {
-    return <div className="min-h-screen bg-warm-sand flex items-center justify-center">
-      <p className="text-heritage text-xl">Product not found.</p>
-    </div>;
+    return (
+      <div className="min-h-screen bg-warm-sand flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-heritage text-xl mb-4">Product not found.</p>
+          <button
+            onClick={() => router.push('/shop')}
+            className="px-6 py-2 bg-copper text-white rounded-md hover:bg-heritage transition"
+          >
+            Browse Products
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
     <>
       <Head>
-        <title>{product.title} | Premium Jewelry</title>
+        <title>{product.title} | Varaha Jewels</title>
         <meta name="description" content={product.description} />
       </Head>
 
-      <div className="min-h-screen flex flex-col bg-gray-50">
+      <div className="min-h-screen flex flex-col bg-white">
         {/* Header */}
         <Header cartCount={cartCount} onCartClick={() => setIsCartModalOpen(true)} />
 
-        {/* Main Content */}
-        <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
-          {/* Product Section */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12 mb-16">
-            {/* Product Images */}
-            <div>
-              <ProductCarousel images={product.images} />
+        {/* Main Content - Myntra Style Layout */}
+        <main className="flex-1">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            {/* Desktop Layout: Image Grid Left, Info Right (Sticky) */}
+            <div className="lg:grid lg:grid-cols-12 lg:gap-8">
+
+              {/* Left Column - Product Images (2x2 Grid) */}
+              <div className="lg:col-span-7 xl:col-span-7">
+                <ProductCarousel
+                  images={product.images}
+                  rating={product.averageRating}
+                  reviewCount={product.reviewCount}
+                />
+              </div>
+
+              {/* Right Column - Product Info (Sticky on desktop) */}
+              <div className="lg:col-span-5 xl:col-span-5 mt-6 lg:mt-0">
+                <div className="lg:sticky lg:top-24">
+                  <ProductInfo
+                    product={product}
+                    onAddToCart={handleAddToCart}
+                    onBuyNow={handleBuyNow}
+                  />
+                </div>
+              </div>
             </div>
 
-            {/* Product Info */}
-            <div>
-              <ProductInfo
-                product={product}
-                onAddToCart={handleAddToCart}
-                onBuyNow={handleBuyNow}
+            {/* Reviews Section */}
+            <div className="mt-12 border-t border-gray-200 pt-8">
+              <ReviewsSection
+                reviews={product.reviews}
+                averageRating={product.averageRating}
+                reviewCount={product.reviewCount}
               />
             </div>
           </div>
-
-          {/* Reviews */}
-          <div className="max-w-5xl mx-auto">
-            <ReviewsSection
-              reviews={product.reviews}
-              averageRating={product.averageRating}
-              reviewCount={product.reviewCount}
-            />
-          </div>
-
-          {/* Recommended Products */}
-          {/* <div className="max-w-5xl mx-auto">
-            <RecommendedProducts products={product.recommendations} />
-          </div> */}
         </main>
 
         {/* Sticky Mobile Buy Bar */}
