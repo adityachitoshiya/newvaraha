@@ -121,10 +121,10 @@ export default function ProductInfo({ product, onAddToCart, onBuyNow }) {
                   onClick={() => setSelectedVariant(variant)}
                   disabled={variant.disabled}
                   className={`w-14 h-14 rounded-full border-2 font-medium text-sm transition-all ${selectedVariant.id === variant.id
-                      ? 'border-copper text-copper bg-copper/10'
-                      : variant.disabled
-                        ? 'border-gray-200 text-gray-300 line-through cursor-not-allowed'
-                        : 'border-matte-brown/30 text-heritage hover:border-copper'
+                    ? 'border-copper text-copper bg-copper/10'
+                    : variant.disabled
+                      ? 'border-gray-200 text-gray-300 line-through cursor-not-allowed'
+                      : 'border-matte-brown/30 text-heritage hover:border-copper'
                     }`}
                 >
                   {variant.name || variant.title}
@@ -144,7 +144,7 @@ export default function ProductInfo({ product, onAddToCart, onBuyNow }) {
         <button
           onClick={handleAddToCart}
           disabled={!selectedVariant.inStock}
-          className="flex-1 flex items-center justify-center gap-2 px-6 py-4 bg-copper hover:bg-heritage text-white font-bold text-base rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+          className="flex-1 flex items-center justify-center gap-2 px-6 py-3.5 bg-copper hover:bg-heritage text-white font-bold text-base rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
         >
           <ShoppingBag size={20} />
           ADD TO BAG
@@ -159,7 +159,7 @@ export default function ProductInfo({ product, onAddToCart, onBuyNow }) {
             title: product.title
           }}
           size="lg"
-          className="flex-1 flex items-center justify-center gap-2 px-6 py-4 border-2 border-copper/50 hover:border-copper text-heritage font-bold text-base rounded-md transition-colors"
+          className="flex-1 flex items-center justify-center gap-2 px-6 py-3.5 border-2 border-copper/50 hover:border-copper text-heritage font-bold text-base rounded-md transition-colors"
           showText={true}
         />
       </div>

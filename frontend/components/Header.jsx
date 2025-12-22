@@ -173,10 +173,10 @@ export default function Header({ cartCount = 0, onCartClick }) {
               {/* Cart - Visible on all devices */}
               <button
                 onClick={handleCartClick}
-                className="relative flex items-center justify-center w-10 h-10 text-heritage hover:text-copper transition-colors duration-200 flex-shrink-0"
+                className="relative flex items-center justify-center w-12 h-12 text-heritage hover:text-copper transition-colors duration-200 flex-shrink-0 touch-manipulation"
                 aria-label="Shopping cart"
               >
-                <ShoppingBag size={18} className="sm:w-5 sm:h-5" />
+                <ShoppingBag size={20} className="sm:w-5 sm:h-5" />
                 {displayCartCount > 0 && (
                   <span className="absolute -top-1 -right-1 bg-copper text-warm-sand text-[9px] sm:text-[10px] font-bold rounded-full min-w-[16px] h-4 sm:min-w-[18px] sm:h-[18px] flex items-center justify-center px-0.5 leading-none">
                     {displayCartCount}
