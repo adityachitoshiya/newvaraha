@@ -45,19 +45,12 @@ export default function Checkout() {
   const [orderDetails, setOrderDetails] = useState(null);
 
   useEffect(() => {
+    if (!router.isReady) return;
+
     const { productId, variantId, quantity, amount, productName, fromCart } = router.query;
 
-    if (fromCart === 'true') {
-      const savedCart = localStorage.getItem('cart');
-      if (savedCart) {
-        try {
-          const items = JSON.parse(savedCart);
-          setCartItems(items);
-        } catch (e) {
-          console.error('Failed to parse cart:', e);
-        }
-      }
-    } else if (productId && variantId && quantity && amount) {
+    // Check if we have direct buy parameters
+    if (productId && variantId && quantity && amount) {
       const { image, description } = router.query;
       setOrderDetails({
         productId,
@@ -68,8 +61,21 @@ export default function Checkout() {
         image: image || null,
         description: description || ''
       });
+    } else {
+      // Fallback to cart (either explicit flag or default)
+      const savedCart = localStorage.getItem('cart');
+      if (savedCart) {
+        try {
+          const items = JSON.parse(savedCart);
+          if (items.length > 0) {
+            setCartItems(items);
+          }
+        } catch (e) {
+          console.error('Failed to parse cart:', e);
+        }
+      }
     }
-  }, [router.query]);
+  }, [router.isReady, router.query]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -258,16 +264,15 @@ export default function Checkout() {
         const API_URL = getApiUrl();
         const token = localStorage.getItem('customer_token') || localStorage.getItem('token');
         if (!token) {
-          setError('Please login to place an order');
-          setIsLoading(false);
-          return;
+          // Guest Checkout - Proceed without token
         }
 
         const response = await fetch(`${API_URL}/api/create-cod-order`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
           },
           body: JSON.stringify({ ...orderData, codCharges: COD_CHARGE })
         });
@@ -292,16 +297,15 @@ export default function Checkout() {
     try {
       const token = localStorage.getItem('customer_token') || localStorage.getItem('token');
       if (!token) {
-        setError('Please login to place an order');
-        setIsLoading(false);
-        return;
+        // Guest Checkout - Proceed without token
       }
 
       const response = await fetch(`${getApiUrl()}/api/create-checkout-session`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
         body: JSON.stringify(orderData)
       });
@@ -749,7 +753,7 @@ export default function Checkout() {
                 </div>
 
                 <button type="submit" disabled={isLoading} className="w-full py-4 bg-copper text-white font-bold rounded hover:bg-heritage transition-colors disabled:opacity-50">
-                  {isLoading ? 'Processing...' : `Pay ₹${Math.round(finalAmount).toLocaleString()}`}
+                  {isLoading ? 'Processing...' : (paymentMethod === 'cod' ? 'Place Order' : `Pay ₹${Math.round(finalAmount).toLocaleString()}`)}
                 </button>
               </form>
             </div>
@@ -906,7 +910,7 @@ export default function Checkout() {
               disabled={isLoading}
               className="flex-1 flex items-center justify-center gap-2 py-3 bg-copper text-white font-bold rounded-lg disabled:opacity-50"
             >
-              {isLoading ? 'Processing...' : `Pay ₹${Math.round(finalAmount).toLocaleString()}`}
+              {isLoading ? 'Processing...' : (paymentMethod === 'cod' ? 'Place Order' : `Pay ₹${Math.round(finalAmount).toLocaleString()}`)}
               <Lock size={16} />
             </button>
           )}

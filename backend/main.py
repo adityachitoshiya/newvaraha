@@ -1,9 +1,9 @@
 from dotenv import load_dotenv
 from pathlib import Path
-env_path = Path(__file__).resolve().parent.parent / ".env"
+env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
-from fastapi import FastAPI, Depends, HTTPException, Query, File, UploadFile, Form
+from fastapi import FastAPI, Depends, HTTPException, Query, File, UploadFile, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from database import create_db_and_tables, get_session
 from models import (
@@ -65,10 +65,17 @@ def read_root():
 
 # --- Auth Routes ---
 # --- Auth Routes ---
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/login", auto_error=False)
 
 # Shared dependency to get current user (Admin or Customer)
-async def get_current_user(token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+async def get_current_user(token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     # 1. Try Local Token (Admin/Customer)
     try:
         from auth_utils import ALGORITHM, SECRET_KEY
@@ -300,6 +307,18 @@ class SocialLogin(BaseModel):
 from passlib.context import CryptContext
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
+
+@app.get("/api/auth/check-email")
+def check_email_exists(email: str, session: Session = Depends(get_session)):
+    customer = session.exec(select(Customer).where(Customer.email == email)).first()
+    if customer:
+        return {
+            "exists": True, 
+            "is_guest": customer.supabase_uid is None, # If no UID, it's a guest account
+            "full_name": customer.full_name
+        }
+    return {"exists": False}
+
 @app.post("/api/auth/signup", response_model=Customer)
 def customer_signup(customer_data: CustomerCreate, session: Session = Depends(get_session)):
     existing_user = session.exec(select(Customer).where(Customer.email == customer_data.email)).first()
@@ -374,6 +393,16 @@ def sync_user(user_data: UserSync, token: str = Depends(oauth2_scheme), session:
                 session.add(customer)
                 session.commit()
                 session.refresh(customer)
+                
+                # CRITICAL: Link old Guest Orders to this new User ID
+                # Find orders with this email but no user_id, update them
+                guest_orders = session.exec(select(Order).where(Order.email == customer.email, Order.user_id == None)).all()
+                for order in guest_orders:
+                    order.user_id = uuid.UUID(uid)
+                    session.add(order)
+                session.commit()
+                print(f"DEBUG: Linked {len(guest_orders)} guest orders to user {uid}")
+
         else:
             # Create new customer
             customer = Customer(
@@ -554,11 +583,15 @@ def delete_review(review_id: int, token: str = Depends(oauth2_scheme), session: 
 
 # --- Order Routes ---
 @app.post("/api/orders", response_model=Order)
-def create_order(order: Order, session: Session = Depends(get_session)):
+def create_order(order: Order, background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
     try:
         session.add(order)
         session.commit()
         session.refresh(order)
+        
+        # Send notifications in background
+        background_tasks.add_task(send_order_notifications, order.dict())
+        
         return order
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -892,7 +925,7 @@ class OrderCreate(BaseModel):
     isCartCheckout: Optional[bool] = False
 
 @app.post("/api/create-cod-order")
-def create_cod_order(order_data: OrderCreate, token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
     # Extract User ID from Supabase Token
     user_id = None
     user_email = None
@@ -907,9 +940,23 @@ def create_cod_order(order_data: OrderCreate, token: str = Depends(oauth2_scheme
                 user_email = user_data_sb.user.email
                 print(f"DEBUG: Creating order for User UUID: {user_id}, Email: {user_email}")
     except Exception as e:
-        print(f"DEBUG: Supabase Token Check Failed: {e}")
+        # print(f"DEBUG: Supabase Token Check Failed: {e}")
         # Allow order creation without user_id for guest checkout
         pass
+
+    # Guest Handling: Ensure Customer Exists
+    if not user_id:
+        existing_cust = session.exec(select(Customer).where(Customer.email == order_data.email)).first()
+        if not existing_cust:
+            # Create Guest Customer
+            new_guest = Customer(
+                full_name=order_data.name,
+                email=order_data.email,
+                provider="guest",
+                is_active=True
+            )
+            session.add(new_guest)
+            session.commit()
 
     try:
         # Create Items JSON
@@ -975,11 +1022,19 @@ def create_cod_order(order_data: OrderCreate, token: str = Depends(oauth2_scheme
         session.commit()
         session.refresh(new_order)
         
-        # Trigger external notifications (Email/Telegram)
-        send_order_notifications({
+        # Trigger external notifications (Email/Telegram) via BackgroundTasks
+        # Pass FULL payload so notifications.py has what it needs
+        notification_payload = {
             "order_id": new_order.order_id,
-            "total_amount": new_order.total_amount
-        })
+            "total_amount": new_order.total_amount,
+            "email": new_order.email,
+            "customer_name": new_order.customer_name,
+            "address": new_order.address,
+            "city": new_order.city,
+            "pincode": new_order.pincode,
+            "items_json": new_order.items_json
+        }
+        background_tasks.add_task(send_order_notifications, notification_payload)
         
         return {"ok": True, "orderId": new_order.order_id, "message": "Order placed successfully"}
         
@@ -988,7 +1043,7 @@ def create_cod_order(order_data: OrderCreate, token: str = Depends(oauth2_scheme
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/create-checkout-session")
-def create_checkout_session(order_data: OrderCreate, token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
     # Extract User ID from Supabase Token
     user_id = None
     try:
@@ -1001,6 +1056,20 @@ def create_checkout_session(order_data: OrderCreate, token: str = Depends(oauth2
                 print(f"DEBUG: Checkout for User UUID: {user_id}")
     except Exception as e:
         print(f"DEBUG: Supabase Token Check Failed in checkout: {e}")
+
+    # Guest Handling: Ensure Customer Exists
+    if not user_id:
+        existing_cust = session.exec(select(Customer).where(Customer.email == order_data.email)).first()
+        if not existing_cust:
+            # Create Guest Customer
+            new_guest = Customer(
+                full_name=order_data.name,
+                email=order_data.email,
+                provider="guest",
+                is_active=True
+            )
+            session.add(new_guest)
+            session.commit()
 
     try:
         # 1. Find Active Gateway
@@ -1119,8 +1188,8 @@ class OrderStatusUpdate(BaseModel):
     paymentId: Optional[str] = None
 
 @app.post("/api/update-order-status")
-def update_order_status(update_data: OrderStatusUpdate, session: Session = Depends(get_session)):
-    order = session.get(Order, update_data.orderId)
+def update_order_status(update_data: OrderStatusUpdate, background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
+    order = session.exec(select(Order).where(Order.order_id == update_data.orderId)).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
@@ -1145,11 +1214,18 @@ def update_order_status(update_data: OrderStatusUpdate, session: Session = Depen
     if update_data.paymentId:
         order.payment_status = "Paid" 
         
-        # Trigger external notifications (Email/Telegram) ONLY upon successful payment
-        send_order_notifications({
+        # Trigger external notifications (Email/Telegram) via BackgroundTasks
+        notification_payload = {
             "order_id": order.order_id,
-            "total_amount": order.total_amount
-        })
+            "total_amount": order.total_amount,
+            "email": order.email,
+            "customer_name": order.customer_name,
+            "address": order.address,
+            "city": order.city,
+            "pincode": order.pincode,
+            "items_json": order.items_json
+        }
+        background_tasks.add_task(send_order_notifications, notification_payload)
     
     session.add(order)
     session.commit()

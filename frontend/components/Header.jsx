@@ -4,17 +4,19 @@ import { useCart } from '../context/CartContext';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/router';
+import AddToCartModal from './AddToCartModal';
 
 export default function Header({ cartCount = 0, onCartClick }) {
   const router = useRouter();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSticky, setIsSticky] = useState(false);
-  const { cartCount: contextCartCount } = useCart();
+  const { cartCount: contextCartCount, cartItems, removeFromCart, updateQuantity } = useCart();
   const [wishlistCount, setWishlistCount] = useState(0);
   const [user, setUser] = useState(null);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [mobileSearchQuery, setMobileSearchQuery] = useState('');
+  const [isCartModalOpen, setIsCartModalOpen] = useState(false);
 
   const searchRef = useRef(null);
   const profileRef = useRef(null);
@@ -98,6 +100,15 @@ export default function Header({ cartCount = 0, onCartClick }) {
     router.push('/');
   };
 
+  const handleCartClick = (e) => {
+    if (e) e.preventDefault();
+    if (onCartClick) {
+      onCartClick();
+    } else {
+      setIsCartModalOpen(true);
+    }
+  };
+
   return (
     <>
       <header className="sticky top-0 z-50 bg-[#EFE9E2] border-b border-heritage/15 shadow-sm backdrop-blur-sm">
@@ -161,7 +172,7 @@ export default function Header({ cartCount = 0, onCartClick }) {
 
               {/* Cart - Visible on all devices */}
               <button
-                onClick={onCartClick}
+                onClick={handleCartClick}
                 className="relative flex items-center justify-center w-10 h-10 text-heritage hover:text-copper transition-colors duration-200 flex-shrink-0"
                 aria-label="Shopping cart"
               >
@@ -394,7 +405,24 @@ export default function Header({ cartCount = 0, onCartClick }) {
           animation: slideDown 0.3s ease-out;
         }
       `}</style>
+
+      {/* Global Cart Modal */}
+      <AddToCartModal
+        isOpen={isCartModalOpen}
+        onClose={() => setIsCartModalOpen(false)}
+        cartItems={cartItems || []}
+        onUpdateQuantity={updateQuantity}
+        onRemoveItem={(sku) => removeFromCart(null, sku)}
+        onContinueShopping={() => setIsCartModalOpen(false)}
+        onViewCart={() => {
+          setIsCartModalOpen(false);
+          // Optional: Navigate to /cart if you have a page, but modal is enough usually
+        }}
+        onCheckout={() => {
+          setIsCartModalOpen(false);
+          window.location.href = '/checkout?fromCart=true';
+        }}
+      />
     </>
   );
 }
-

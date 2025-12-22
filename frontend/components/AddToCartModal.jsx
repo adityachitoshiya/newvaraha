@@ -2,16 +2,16 @@ import { X, ShoppingCart, ArrowRight, Plus, Minus, Trash2 } from 'lucide-react';
 import { formatCurrency } from '../lib/productData';
 import { useEffect } from 'react';
 
-export default function AddToCartModal({ 
-  isOpen, 
-  onClose, 
-  cartItems, 
-  onUpdateQuantity, 
-  onRemoveItem, 
-  onContinueShopping, 
-  onViewCart, 
+export default function AddToCartModal({
+  isOpen,
+  onClose,
+  cartItems,
+  onUpdateQuantity,
+  onRemoveItem,
+  onContinueShopping,
+  onViewCart,
   onCheckout,
-  product 
+  product
 }) {
   const total = cartItems.reduce((sum, item) => sum + (item.variant.price * item.quantity), 0);
 
@@ -40,10 +40,7 @@ export default function AddToCartModal({
 
   if (!isOpen) return null;
 
-  const getVariantImage = (variant) => {
-    const image = product.images.find(img => img.id === variant.imageId);
-    return image ? image.url : product.images[0]?.url;
-  };
+  if (!isOpen) return null;
 
   return (
     <>
@@ -88,15 +85,15 @@ export default function AddToCartModal({
               {cartItems.map((item) => (
                 <div key={item.variant.sku} className="flex gap-4 p-4 bg-white border rounded-lg shadow-sm">
                   <img
-                    src={getVariantImage(item.variant)}
-                    alt={item.variant.title}
+                    src={item.image || item.variant.image || '/varaha-assets/og.jpg'}
+                    alt={item.productName || item.variant.title}
                     className="w-20 h-20 object-cover rounded-lg"
                   />
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-gray-900 text-sm truncate">{product.title}</h3>
-                    <p className="text-xs text-gray-500">{item.variant.title}</p>
+                    <h3 className="font-semibold text-gray-900 text-sm truncate">{item.productName}</h3>
+                    <p className="text-xs text-gray-500">{item.variant.title || item.variant.name}</p>
                     <p className="text-sm font-bold text-gray-900 mt-1">{formatCurrency(item.variant.price)}</p>
-                    
+
                     {/* Quantity Controls */}
                     <div className="flex items-center justify-between mt-2">
                       <div className="flex items-center border border-gray-300 rounded-lg overflow-hidden">
@@ -116,7 +113,7 @@ export default function AddToCartModal({
                           <Plus size={14} />
                         </button>
                       </div>
-                      
+
                       <button
                         onClick={() => onRemoveItem(item.variant.sku)}
                         className="text-red-500 hover:text-red-700 transition"
@@ -136,7 +133,7 @@ export default function AddToCartModal({
                 <span className="text-lg font-semibold text-gray-900">Subtotal:</span>
                 <span className="text-2xl font-bold text-gray-900">{formatCurrency(total)}</span>
               </div>
-              
+
               <div className="space-y-2">
                 <button
                   onClick={onCheckout}
@@ -145,7 +142,7 @@ export default function AddToCartModal({
                   Proceed to Checkout
                   <ArrowRight size={18} />
                 </button>
-                
+
                 <button
                   onClick={onContinueShopping}
                   className="w-full px-6 py-3 border-2 border-gray-300 text-gray-700 font-semibold rounded-xl hover:bg-gray-50 transition"

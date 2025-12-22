@@ -1,8 +1,10 @@
 {
   "/_app": "pages/_app.js",
   "/_document": "pages/_document.js",
+  "/_error": "pages/_error.js",
   "/": "pages/index.js",
+  "/payment-success": "pages/payment-success.js",
+  "/new-arrivals": "pages/new-arrivals.js",
   "/shop": "pages/shop.js",
-  "/product/[id]": "pages/product/[id].js",
-  "/checkout": "pages/checkout.js"
+  "/account": "pages/account.js"
 }

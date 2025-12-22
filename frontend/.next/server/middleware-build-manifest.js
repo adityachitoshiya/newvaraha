@@ -1,1 +1,54 @@
-self.__BUILD_MANIFEST={"pages":{"/_app":["static/chunks/[root of the server]__5a1a3a._.js","static/chunks/node_modules_next_14018a._.js","static/chunks/node_modules_react_1cad9b._.js","static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js","static/chunks/node_modules_react-dom_f14d04._.js","static/chunks/node_modules_@supabase_auth-js_dist_module_105bee._.js","static/chunks/node_modules_@supabase_storage-js_dist_index_mjs_12daf3._.js","static/chunks/node_modules_@supabase_realtime-js_dist_module_6c5d4b._.js","static/chunks/node_modules_8d80be._.js","static/chunks/styles_globals_796361.css","static/chunks/node_modules_next_dist_pages_5c230e._.js","static/chunks/[next]_entry_page-loader_ts_39cc14._.js","static/chunks/[next]_entry_page-loader_ts_01b3bf._.js"],"/":["static/chunks/[root of the server]__963fcf._.js","static/chunks/node_modules_next_dist_compiled_036dbb._.js","static/chunks/node_modules_next_dist_shared_lib_3a9454._.js","static/chunks/node_modules_next_dist_client_1bf224._.js","static/chunks/node_modules_next_dist_ed27f8._.js","static/chunks/node_modules_next_27fbc8._.js","static/chunks/node_modules_react_1cad9b._.js","static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js","static/chunks/node_modules_react-dom_f14d04._.js","static/chunks/node_modules_@supabase_auth-js_dist_module_105bee._.js","static/chunks/node_modules_@supabase_storage-js_dist_index_mjs_12daf3._.js","static/chunks/node_modules_@supabase_realtime-js_dist_module_6c5d4b._.js","static/chunks/node_modules_98c563._.js","static/chunks/node_modules_next_dist_pages_f40435._.js","static/chunks/[next]_entry_page-loader_ts_d2b2a3._.js","static/chunks/[next]_entry_page-loader_ts_2b92f8._.js"],"/shop":["static/chunks/[root of the server]__bf76be._.js","static/chunks/node_modules_next_dist_compiled_732b64._.js","static/chunks/node_modules_next_dist_shared_lib_3a9454._.js","static/chunks/node_modules_next_dist_client_1bf224._.js","static/chunks/node_modules_next_dist_ed27f8._.js","static/chunks/node_modules_next_e84c4e._.js","static/chunks/node_modules_react_1cad9b._.js","static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js","static/chunks/node_modules_react-dom_f14d04._.js","static/chunks/node_modules_@supabase_auth-js_dist_module_105bee._.js","static/chunks/node_modules_@supabase_storage-js_dist_index_mjs_12daf3._.js","static/chunks/node_modules_@supabase_realtime-js_dist_module_6c5d4b._.js","static/chunks/node_modules_0ac09e._.js","static/chunks/node_modules_next_dist_pages_31032d._.js","static/chunks/[next]_entry_page-loader_ts_bcc698._.js","static/chunks/[next]_entry_page-loader_ts_e0d95e._.js"],"/product/[id]":["static/chunks/[root of the server]__c12785._.js","static/chunks/node_modules_next_dist_compiled_5eb400._.js","static/chunks/node_modules_next_dist_shared_lib_3a9454._.js","static/chunks/node_modules_next_dist_client_1bf224._.js","static/chunks/node_modules_next_dist_ed27f8._.js","static/chunks/node_modules_next_599f69._.js","static/chunks/node_modules_react_1cad9b._.js","static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js","static/chunks/node_modules_react-dom_f14d04._.js","static/chunks/node_modules_@supabase_auth-js_dist_module_105bee._.js","static/chunks/node_modules_@supabase_storage-js_dist_index_mjs_12daf3._.js","static/chunks/node_modules_@supabase_realtime-js_dist_module_6c5d4b._.js","static/chunks/node_modules_584c48._.js","static/chunks/node_modules_next_dist_pages_092700._.js","static/chunks/[next]_entry_page-loader_ts_183243._.js","static/chunks/[next]_entry_page-loader_ts_07db8b._.js"],"/checkout":["static/chunks/[root of the server]__7f657d._.js","static/chunks/node_modules_next_dist_compiled_732b64._.js","static/chunks/node_modules_next_dist_shared_lib_3a9454._.js","static/chunks/node_modules_next_dist_client_1bf224._.js","static/chunks/node_modules_next_dist_ed27f8._.js","static/chunks/node_modules_next_957083._.js","static/chunks/node_modules_react_1cad9b._.js","static/chunks/node_modules_react-dom_cjs_react-dom_development_ab7e07.js","static/chunks/node_modules_react-dom_f14d04._.js","static/chunks/node_modules_@supabase_auth-js_dist_module_105bee._.js","static/chunks/node_modules_@supabase_storage-js_dist_index_mjs_12daf3._.js","static/chunks/node_modules_@supabase_realtime-js_dist_module_6c5d4b._.js","static/chunks/node_modules_96b62d._.js","static/chunks/node_modules_next_dist_pages_022a3a._.js","static/chunks/[next]_entry_page-loader_ts_d03a01._.js","static/chunks/[next]_entry_page-loader_ts_f57c3f._.js"]},"devFiles":[],"ampDevFiles":[],"polyfillFiles":[],"lowPriorityFiles":["static/development/_ssgManifest.js","static/development/_buildManifest.js"],"rootMainFiles":[],"ampFirstPages":[]};
+self.__BUILD_MANIFEST = {
+  "polyfillFiles": [
+    "static/chunks/polyfills.js"
+  ],
+  "devFiles": [
+    "static/chunks/react-refresh.js"
+  ],
+  "ampDevFiles": [],
+  "lowPriorityFiles": [],
+  "rootMainFiles": [],
+  "pages": {
+    "/": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/index.js"
+    ],
+    "/_app": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/_app.js"
+    ],
+    "/_error": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/_error.js"
+    ],
+    "/account": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/account.js"
+    ],
+    "/new-arrivals": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/new-arrivals.js"
+    ],
+    "/payment-success": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/payment-success.js"
+    ],
+    "/shop": [
+      "static/chunks/webpack.js",
+      "static/chunks/main.js",
+      "static/chunks/pages/shop.js"
+    ]
+  },
+  "ampFirstPages": []
+};
+self.__BUILD_MANIFEST.lowPriorityFiles = [
+"/static/" + process.env.__NEXT_BUILD_ID + "/_buildManifest.js",
+,"/static/" + process.env.__NEXT_BUILD_ID + "/_ssgManifest.js",
+
+];

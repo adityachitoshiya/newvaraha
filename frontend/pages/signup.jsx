@@ -18,9 +18,41 @@ export default function Signup() {
     const [loading, setLoading] = useState(false);
     const [success, setSuccess] = useState(false);
 
+    const [existingAccount, setExistingAccount] = useState(null);
+
+    const checkEmail = async (email) => {
+        if (!email || !email.includes('@')) return;
+        try {
+            const API_URL = getApiUrl();
+            const res = await fetch(`${API_URL}/api/auth/check-email?email=${email}`);
+            const data = await res.json();
+            if (data.exists) {
+                setExistingAccount(data);
+                if (data.is_guest) {
+                    // Pre-fill name if available
+                    if (data.full_name && !formData.full_name) {
+                        setFormData(prev => ({ ...prev, full_name: data.full_name }));
+                    }
+                }
+            } else {
+                setExistingAccount(null);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
     const handleChange = (e) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
         if (error) setError(null);
+
+        if (e.target.name === 'email') {
+            setExistingAccount(null); // Reset while typing
+        }
+    };
+
+    const handleEmailBlur = () => {
+        checkEmail(formData.email);
     };
 
     const handleSignup = async (e) => {
@@ -181,8 +213,27 @@ export default function Signup() {
                                     onChange={handleChange}
                                     className="focus:ring-copper focus:border-copper block w-full pl-10 sm:text-sm border-gray-300 rounded-lg py-2.5"
                                     placeholder="you@example.com"
+                                    onBlur={handleEmailBlur}
                                 />
                             </div>
+                            {existingAccount && (
+                                <div className={`mt-2 text-sm p-3 rounded-lg flex items-start gap-2 ${existingAccount.is_guest ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-blue-50 text-blue-700 border border-blue-200'}`}>
+                                    <AlertCircle size={16} className="mt-0.5 shrink-0" />
+                                    <div>
+                                        {existingAccount.is_guest ? (
+                                            <>
+                                                <strong>Account Found!</strong>
+                                                <p>You have placed orders as a guest. Create a password now to claim your account and view order history.</p>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <strong>Already Registered</strong>
+                                                <p>An account exists with this email. <Link href="/login" className="underline font-semibold">Sign in here</Link>.</p>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         <div>
