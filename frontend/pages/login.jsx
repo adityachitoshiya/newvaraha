@@ -92,33 +92,56 @@ export default function Login() {
         const API_URL = getApiUrl();
 
         try {
-            // Step 1: Login with Supabase (all user data is in Supabase)
-            const { data, error: authError } = await supabase.auth.signInWithPassword({
-                email: formData.email,
-                password: formData.password
-            });
+            // Step 1: Login with Supabase (only if input is an email)
+            let data = null;
+            let authError = null;
+
+            if (formData.email.includes('@')) {
+                const res = await supabase.auth.signInWithPassword({
+                    email: formData.email,
+                    password: formData.password
+                });
+                data = res.data;
+                authError = res.error;
+            } else {
+                // If not an email, assume it's a username (Admin) and skip to fallback
+                authError = { message: "Username provided, skipping Supabase" };
+            }
 
             if (authError) {
                 // Step 2: Try Admin Login as fallback
+                console.log("Attempting Admin Login...");
                 const formDataBody = new URLSearchParams();
                 formDataBody.append('username', formData.email);
                 formDataBody.append('password', formData.password);
 
-                const adminRes = await fetch(`${API_URL}/api/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: formDataBody
-                });
+                console.log(`Sending Admin Login Request to: ${API_URL}/api/login`);
 
-                if (adminRes.ok) {
-                    const adminData = await adminRes.json();
-                    localStorage.setItem('token', adminData.access_token);
-                    document.cookie = `token=${adminData.access_token}; path=/`;
-                    router.push('/admin');
-                    return;
+                try {
+                    const adminRes = await fetch(`${API_URL}/api/login`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: formDataBody
+                    });
+
+                    console.log("Admin Login Response Status:", adminRes.status);
+
+                    if (adminRes.ok) {
+                        const adminData = await adminRes.json();
+                        console.log("Admin Login Success", adminData);
+                        localStorage.setItem('token', adminData.access_token);
+                        document.cookie = `token=${adminData.access_token}; path=/`;
+                        router.push('/admin');
+                        return;
+                    } else {
+                        const errorText = await adminRes.text();
+                        console.error("Admin Login Failed:", errorText);
+                        throw new Error("Invalid admin credentials");
+                    }
+                } catch (adminErr) {
+                    console.error("Admin Fetch Error:", adminErr);
+                    throw new Error("Admin login failed: " + adminErr.message);
                 }
-
-                throw new Error("Invalid email or password");
             }
 
             if (data?.session) {

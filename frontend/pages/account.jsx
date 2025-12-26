@@ -144,10 +144,10 @@ export default function Account() {
                             <h3 className="font-semibold text-gray-900">Addresses</h3>
                             <p className="text-xs text-gray-500 mt-1">Manage</p>
                         </div>
-                        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-copper/50 hover:shadow-md transition-all text-center group cursor-pointer">
-                            <User className="w-8 h-8 mx-auto text-gray-400 group-hover:text-copper mb-3 transition-colors" />
-                            <h3 className="font-semibold text-gray-900">Profile</h3>
-                            <p className="text-xs text-gray-500 mt-1">Edit Info</p>
+                        <div onClick={handleLogout} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:border-red-200 hover:shadow-md transition-all text-center group cursor-pointer">
+                            <LogOut className="w-8 h-8 mx-auto text-gray-400 group-hover:text-red-500 mb-3 transition-colors" />
+                            <h3 className="font-semibold text-gray-900 group-hover:text-red-600">Logout</h3>
+                            <p className="text-xs text-gray-500 mt-1">Sign out</p>
                         </div>
                     </div>
 

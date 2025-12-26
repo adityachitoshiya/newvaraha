@@ -87,9 +87,10 @@ export default function AdminLayout({ children }) {
     const unreadCount = notifications.filter(n => !n.is_read).length;
 
     // Check auth on mount
+    // Check auth on mount
     useEffect(() => {
         // If we continue to use localStorage for auth token
-        const token = localStorage.getItem('admin_token');
+        const token = localStorage.getItem('admin_token') || localStorage.getItem('token');
 
         // If on login page, we don't need to block
         if (router.pathname === '/admin/login') {
@@ -112,6 +113,7 @@ export default function AdminLayout({ children }) {
 
     const handleLogout = () => {
         localStorage.removeItem('admin_token');
+        localStorage.removeItem('token');
         router.push('/admin/login');
     };
 
