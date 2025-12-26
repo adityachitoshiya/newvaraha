@@ -39,6 +39,11 @@ export default function Login() {
             localStorage.setItem('customer_token', session.access_token);
             localStorage.setItem('customer_user', JSON.stringify(userData));
 
+            // Clean the URL hash before redirecting to avoid /#
+            if (window.history && window.history.replaceState) {
+                window.history.replaceState(null, null, window.location.pathname);
+            }
+
             setTimeout(() => router.push('/'), 100);
         };
 
@@ -168,10 +173,13 @@ export default function Login() {
             try {
                 // Use Supabase Auth
                 // Redirects to Google, then back to this page (or window.location.origin)
+                const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || (typeof window !== 'undefined' ? window.location.origin : '');
+                const redirectTo = `${siteUrl}/login`;
+
                 const { error } = await supabase.auth.signInWithOAuth({
                     provider: 'google',
                     options: {
-                        redirectTo: typeof window !== 'undefined' ? `${window.location.origin}/login` : undefined
+                        redirectTo: redirectTo
                     }
                 });
 

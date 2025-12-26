@@ -8,28 +8,28 @@ const collections = [
     title: 'Heritage Collection',
     description: 'Timeless pieces inspired by royal traditions',
     image: '/varaha-assets/heroimage.avif',
-    href: '/collections/heritage'
+    href: '/shop?category=Heritage'
   },
   {
     id: 2,
     title: 'Bridal Elegance',
     description: 'Exquisite adornments for your special day',
     image: '/varaha-assets/Jimage2.avif',
-    href: '/collections/bridal'
+    href: '/shop?category=Bridal'
   },
   {
     id: 3,
     title: 'Contemporary Classics',
     description: 'Modern designs with traditional soul',
     image: '/varaha-assets/Jimage3.webp',
-    href: '/collections/contemporary'
+    href: '/shop?category=Contemporary'
   },
   {
     id: 4,
     title: 'Temple Treasures',
     description: 'Sacred artistry in every detail',
     image: '/varaha-assets/herosection2.jpg',
-    href: '/collections/temple'
+    href: '/shop?category=Temple'
   }
 ];
 
@@ -40,9 +40,8 @@ function CollectionCard({ collection, delay }) {
     <Link
       ref={ref}
       href={collection.href}
-      className={`group transition-all duration-700 ${
-        isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
-      }`}
+      className={`group transition-all duration-700 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
+        }`}
       style={{ transitionDelay: `${delay}ms` }}
     >
       <div className="bg-white border border-copper/30 rounded-sm overflow-hidden hover:border-copper hover:shadow-lg transition-all duration-500 hover:scale-[1.02]">
@@ -68,7 +67,7 @@ function CollectionCard({ collection, delay }) {
           <p className="font-sans text-sm text-heritage/70 mb-5 leading-relaxed">
             {collection.description}
           </p>
-          
+
           <div className="flex items-center text-copper font-semibold text-sm group-hover:gap-3 transition-all duration-300">
             <span>Explore</span>
             <ArrowRight className="ml-2 group-hover:translate-x-2 transition-transform duration-300" size={18} />
@@ -88,9 +87,8 @@ export default function FeaturedCollections() {
         {/* Section Header */}
         <div
           ref={ref}
-          className={`text-center mb-20 transition-all duration-800 ${
-            isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
-          }`}
+          className={`text-center mb-20 transition-all duration-800 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
+            }`}
         >
           <div className="w-16 h-px bg-copper mx-auto mb-6"></div>
           <h2 className="font-royal text-5xl md:text-6xl font-bold text-heritage mb-6 tracking-tight">

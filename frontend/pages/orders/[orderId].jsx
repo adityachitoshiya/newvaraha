@@ -150,10 +150,10 @@ export default function OrderDetails() {
                     {/* Timeline */}
                     <div className="bg-white p-8 rounded-sm border border-copper/30 mb-8">
                         <h2 className="text-xl font-royal font-bold text-heritage mb-6">Delivery Status</h2>
-                        <div className="relative border-l-2 border-copper/20 ml-3 space-y-8 pl-8">
+                        <div className="relative border-l-2 border-copper/20 ml-2 space-y-8 pl-8">
                             {order.history.map((step, index) => (
                                 <div key={index} className="relative">
-                                    <span className="absolute -left-[41px] bg-warm-sand border-2 border-copper rounded-full p-1.5 text-copper">
+                                    <span className="absolute -left-[43px] bg-warm-sand border-2 border-copper rounded-full p-1.5 text-copper">
                                         {step.status.toLowerCase().includes('delivered') ? <CheckCircle size={16} /> :
                                             step.status.toLowerCase().includes('shipped') ? <Truck size={16} /> :
                                                 <Clock size={16} />}
@@ -173,7 +173,7 @@ export default function OrderDetails() {
                             {/* Future Steps Visualization (Static) */}
                             {!isDelivered && (
                                 <div className="relative opacity-40">
-                                    <span className="absolute -left-[41px] bg-gray-200 rounded-full p-1.5 text-gray-400">
+                                    <span className="absolute -left-[43px] bg-gray-200 rounded-full p-1.5 text-gray-400">
                                         <Package size={16} />
                                     </span>
                                     <h3 className="text-lg font-bold text-gray-500">Delivered</h3>

@@ -8,8 +8,10 @@ import Footer from '../components/Footer';
 import { getApiUrl } from '../lib/config';
 import { Search, SlidersHorizontal, Grid, List, Heart, X, ChevronDown, Filter, ShoppingBag } from 'lucide-react';
 import { useCart } from '../context/CartContext';
+import { useRouter } from 'next/router';
 
 export default function Shop() {
+    const router = useRouter();
     const [products, setProducts] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [viewMode, setViewMode] = useState('grid');
@@ -34,6 +36,35 @@ export default function Shop() {
             setWishlist(JSON.parse(savedWishlist));
         }
     }, []);
+
+    // Apply filters from URL query params
+    useEffect(() => {
+        if (!router.isReady) return;
+
+        const { category, style, metal, search } = router.query;
+
+        if (category) {
+            const cats = Array.isArray(category) ? category : [category];
+            setSelectedCategories(cats);
+        }
+
+        if (style) {
+            const styles = Array.isArray(style) ? style : [style];
+            setSelectedStyles(styles);
+        }
+
+        if (metal) {
+            const mets = Array.isArray(metal) ? metal : [metal];
+            setSelectedMetals(mets);
+        }
+
+        if (search) {
+            setSearchQuery(search);
+        }
+
+    }, [router.isReady, router.query]);
+
+
 
     const fetchProducts = async () => {
         try {
@@ -152,7 +183,7 @@ export default function Shop() {
                 <meta name="description" content="Browse our exquisite collection of heritage jewelry. Shop gold, silver, kundan, and bridal jewelry with authentic craftsmanship." />
             </Head>
             <Header />
-            <main className="min-h-screen bg-warm-sand pt-24 pb-16">
+            <main className="min-h-screen bg-warm-sand pt-24 pb-32">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                     {/* Page Header */}
                     <div className="mb-8">
@@ -215,14 +246,14 @@ export default function Shop() {
 
                     <div className="flex gap-8 relative">
                         {/* Filters Sidebar */}
-                        <aside className={`lg:w-64 lg:block fixed lg:static inset-0 z-40 bg-white lg:bg-transparent transition-transform duration-300 transform ${showFilters ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+                        <aside className={`lg:w-64 lg:block fixed lg:static inset-0 z-[60] bg-white lg:bg-transparent transition-transform duration-300 transform ${showFilters ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
                             {/* Mobile Close */}
                             <div className="lg:hidden flex justify-between items-center p-4 border-b">
                                 <h2 className="font-bold text-lg">Filters</h2>
                                 <button onClick={() => setShowFilters(false)}><X size={24} /></button>
                             </div>
 
-                            <div className="p-4 lg:p-0 space-y-8 overflow-y-auto h-full lg:h-auto max-h-[calc(100vh-100px)] lg:sticky lg:top-40">
+                            <div className="p-4 lg:p-0 pb-32 lg:pb-0 space-y-8 overflow-y-auto h-full lg:h-auto max-h-[calc(100vh-100px)] lg:sticky lg:top-40">
                                 {/* Categories */}
                                 <div>
                                     <h3 className="font-royal font-bold text-heritage mb-4">Category</h3>
