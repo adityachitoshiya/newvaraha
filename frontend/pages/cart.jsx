@@ -1,67 +1,48 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import Image from 'next/image';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
 import { ShoppingBag, ArrowLeft, Plus, Minus, Trash2, Heart, Tag, ArrowRight, X } from 'lucide-react';
+import { useCart } from '../context/CartContext';
 
 export default function Cart() {
-  const [cartItems, setCartItems] = useState([]);
+  const { cartItems, removeFromCart, updateQuantity, clearCart, cartCount } = useCart();
   const [couponCode, setCouponCode] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState(null);
   const [couponError, setCouponError] = useState('');
   const [discount, setDiscount] = useState(0);
 
-  // Load cart from localStorage on mount
-  useEffect(() => {
-    const savedCart = localStorage.getItem('cart');
-    if (savedCart) {
-      try {
-        setCartItems(JSON.parse(savedCart));
-      } catch (e) {
-        console.error('Failed to parse cart:', e);
-      }
-    }
-  }, []);
-
-  // Save cart to localStorage whenever it changes
-  useEffect(() => {
-    localStorage.setItem('cart', JSON.stringify(cartItems));
-  }, [cartItems]);
-
-  const handleUpdateQuantity = (itemId, newQuantity) => {
-    if (newQuantity <= 0) {
-      handleRemoveItem(itemId);
-      return;
-    }
-    setCartItems(cartItems.map(item => 
-      item.id === itemId ? { ...item, quantity: newQuantity } : item
-    ));
+  const handleUpdateQuantity = (item, newQuantity) => {
+    updateQuantity(item.variant?.sku, newQuantity, item.id);
   };
 
-  const handleRemoveItem = (itemId) => {
-    setCartItems(cartItems.filter(item => item.id !== itemId));
+  const handleRemoveItem = (item) => {
+    removeFromCart(item.id, item.variant.sku);
   };
 
   const handleMoveToWishlist = (item) => {
     // Get existing wishlist
     const savedWishlist = localStorage.getItem('wishlist');
     const wishlist = savedWishlist ? JSON.parse(savedWishlist) : [];
-    
+
     // Add to wishlist if not already there
-    if (!wishlist.find(w => w.id === item.id)) {
-      wishlist.push({ id: item.id, productName: item.productName || item.name });
+    if (!wishlist.find(w => w.id === item.productId || w.id === item.id)) {
+      wishlist.push({
+        id: item.productId || item.id,
+        productName: item.productName || item.name
+      });
       localStorage.setItem('wishlist', JSON.stringify(wishlist));
     }
-    
+
     // Remove from cart
-    handleRemoveItem(item.id);
+    handleRemoveItem(item);
   };
 
   const handleApplyCoupon = () => {
     setCouponError('');
-    
+
     if (couponCode.trim().toUpperCase() === 'TESTADI') {
       setAppliedCoupon('TESTADI');
       setDiscount(1); // 100% discount - makes it ₹1
@@ -84,13 +65,13 @@ export default function Cart() {
 
   const handleClearCart = () => {
     if (confirm('Are you sure you want to clear your cart?')) {
-      setCartItems([]);
+      clearCart();
       handleRemoveCoupon();
     }
   };
 
   // Calculate totals
-  const subtotal = cartItems.reduce((sum, item) => sum + (item.variant.price * item.quantity), 0);
+  const subtotal = cartItems.reduce((sum, item) => sum + ((item.element?.price || item.variant?.price || 0) * item.quantity), 0);
   const discountAmount = appliedCoupon === 'TESTADI' ? subtotal - 1 : subtotal * discount;
   const total = appliedCoupon === 'TESTADI' ? 1 : subtotal - discountAmount;
 
@@ -102,28 +83,28 @@ export default function Cart() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
 
-      <Header cartCount={cartItems.reduce((sum, item) => sum + item.quantity, 0)} />
+      <Header cartCount={cartCount} />
 
-      <main className="min-h-screen bg-warm-sand py-16">
+      <main className="min-h-screen bg-warm-sand py-8 sm:py-16">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           {/* Header */}
-          <div className="mb-12">
+          <div className="mb-8 sm:mb-12">
             <Link
               href="/shop"
-              className="inline-flex items-center gap-2 text-heritage hover:text-copper transition-colors mb-6"
+              className="inline-flex items-center gap-2 text-heritage hover:text-copper transition-colors mb-4 sm:mb-6"
             >
               <ArrowLeft size={20} />
               Continue Shopping
             </Link>
-            <h1 className="text-4xl md:text-5xl font-royal font-bold text-heritage mb-4">Shopping Cart</h1>
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-royal font-bold text-heritage mb-4">Shopping Cart</h1>
             <div className="w-20 h-px bg-copper"></div>
           </div>
 
-          {cartItems.length === 0 ? (
+          {!cartItems || cartItems.length === 0 ? (
             /* Empty Cart State */
-            <div className="bg-white border border-copper/30 rounded-sm p-12 text-center">
-              <ShoppingBag className="mx-auto mb-6 text-heritage/30" size={80} />
-              <h2 className="text-3xl font-royal font-bold text-heritage mb-4">Your cart is empty</h2>
+            <div className="bg-white border border-copper/30 rounded-sm p-8 sm:p-12 text-center">
+              <ShoppingBag className="mx-auto mb-6 text-heritage/30" size={64} />
+              <h2 className="text-2xl sm:text-3xl font-royal font-bold text-heritage mb-4">Your cart is empty</h2>
               <p className="text-heritage/70 mb-8 max-w-md mx-auto">
                 Looks like you haven't added any items to your cart yet. Explore our exquisite collections!
               </p>
@@ -163,18 +144,18 @@ export default function Cart() {
 
                 {cartItems.map((item) => (
                   <div
-                    key={item.id}
-                    className="bg-white border border-copper/30 rounded-sm p-6 hover:shadow-lg transition-shadow duration-300"
+                    key={item.variant?.sku || item.id}
+                    className="bg-white border border-copper/30 rounded-sm p-4 sm:p-6 hover:shadow-lg transition-shadow duration-300"
                   >
-                    <div className="flex gap-6">
+                    <div className="flex gap-4 sm:gap-6">
                       {/* Product Image */}
                       <div className="flex-shrink-0">
                         <Image
-                          src={item.variant.image || '/varaha-assets/dp1.avif'}
+                          src={item.variant?.image || item.image || '/varaha-assets/dp1.avif'}
                           alt={item.productName || item.name}
                           width={120}
                           height={120}
-                          className="w-24 h-24 sm:w-32 sm:h-32 object-cover rounded-sm"
+                          className="w-20 h-20 sm:w-32 sm:h-32 object-cover rounded-sm"
                         />
                       </div>
 
@@ -182,13 +163,13 @@ export default function Cart() {
                       <div className="flex-1 min-w-0">
                         <div className="flex justify-between items-start mb-2">
                           <div>
-                            <h3 className="text-lg font-royal font-bold text-heritage mb-1">
+                            <h3 className="text-base sm:text-lg font-royal font-bold text-heritage mb-1">
                               {item.productName || item.name}
                             </h3>
-                            <p className="text-sm text-heritage/60">{item.variant.name}</p>
+                            <p className="text-sm text-heritage/60">{item.variant?.name}</p>
                           </div>
                           <button
-                            onClick={() => handleRemoveItem(item.id)}
+                            onClick={() => handleRemoveItem(item)}
                             className="text-heritage/40 hover:text-red-600 transition-colors p-2"
                             aria-label="Remove item"
                           >
@@ -199,20 +180,20 @@ export default function Cart() {
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mt-4">
                           {/* Quantity Controls */}
                           <div className="flex items-center gap-4">
-                            <span className="text-sm text-heritage/70">Quantity:</span>
+                            <span className="hidden sm:inline text-sm text-heritage/70">Quantity:</span>
                             <div className="flex items-center border-2 border-copper/30 rounded-sm overflow-hidden">
                               <button
-                                onClick={() => handleUpdateQuantity(item.id, item.quantity - 1)}
+                                onClick={() => handleUpdateQuantity(item, item.quantity - 1)}
                                 className="p-2 hover:bg-copper/10 transition-colors"
                                 aria-label="Decrease quantity"
                               >
                                 <Minus size={16} className="text-copper" />
                               </button>
-                              <span className="px-6 py-2 font-semibold text-heritage min-w-[60px] text-center">
+                              <span className="px-4 sm:px-6 py-2 font-semibold text-heritage min-w-[50px] sm:min-w-[60px] text-center text-sm sm:text-base">
                                 {item.quantity}
                               </span>
                               <button
-                                onClick={() => handleUpdateQuantity(item.id, item.quantity + 1)}
+                                onClick={() => handleUpdateQuantity(item, item.quantity + 1)}
                                 className="p-2 hover:bg-copper/10 transition-colors"
                                 aria-label="Increase quantity"
                               >
@@ -222,12 +203,12 @@ export default function Cart() {
                           </div>
 
                           {/* Price */}
-                          <div className="text-right">
-                            <p className="text-2xl font-bold text-heritage">
-                              ₹{(item.variant.price * item.quantity).toLocaleString('en-IN')}
+                          <div className="text-left sm:text-right">
+                            <p className="text-lg sm:text-2xl font-bold text-heritage">
+                              ₹{((item.variant?.price || 0) * item.quantity).toLocaleString('en-IN')}
                             </p>
                             <p className="text-xs text-heritage/60">
-                              ₹{item.variant.price.toLocaleString('en-IN')} each
+                              ₹{(item.variant?.price || 0).toLocaleString('en-IN')} each
                             </p>
                           </div>
                         </div>
@@ -267,7 +248,7 @@ export default function Cart() {
                             value={couponCode}
                             onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
                             placeholder="Enter code"
-                            className="flex-1 px-4 py-2 border border-copper/30 rounded-sm focus:outline-none focus:ring-2 focus:ring-copper focus:border-copper transition-all text-sm"
+                            className="flex-1 w-full px-4 py-2 border border-copper/30 rounded-sm focus:outline-none focus:ring-2 focus:ring-copper focus:border-copper transition-all text-sm"
                           />
                           <button
                             type="button"
@@ -304,7 +285,7 @@ export default function Cart() {
                       <span>Subtotal</span>
                       <span className="font-semibold">₹{subtotal.toLocaleString('en-IN')}</span>
                     </div>
-                    
+
                     {appliedCoupon && (
                       <div className="flex justify-between text-green-600">
                         <span>Discount ({appliedCoupon})</span>

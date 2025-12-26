@@ -1,8 +1,15 @@
 import { Heart, ShoppingBag, CreditCard } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 export default function StickyBuyBar({ variant, onAddToCart, onBuyNow }) {
   const [isInWishlist, setIsInWishlist] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    return () => setMounted(false);
+  }, []);
 
   // Check wishlist status
   useEffect(() => {
@@ -29,15 +36,15 @@ export default function StickyBuyBar({ variant, onAddToCart, onBuyNow }) {
     window.dispatchEvent(new Event('wishlistUpdated'));
   };
 
-  return (
-    <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-copper/20 shadow-2xl z-30 safe-area-inset-bottom">
+  const content = (
+    <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-copper/20 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-[9999] safe-area-inset-bottom">
       {/* Myntra-style 3-button layout: Heart | Buy Now | Add to Bag */}
-      <div className="flex items-stretch">
+      <div className="flex items-stretch h-16">
 
         {/* Wishlist Heart Button */}
         <button
           onClick={toggleWishlist}
-          className="px-4 flex items-center justify-center border-r border-copper/20"
+          className="w-16 flex items-center justify-center border-r border-copper/20 bg-white active:bg-gray-50 transition-colors"
         >
           <Heart
             size={24}
@@ -50,7 +57,7 @@ export default function StickyBuyBar({ variant, onAddToCart, onBuyNow }) {
         <button
           onClick={() => onBuyNow(variant, 1)}
           disabled={!variant?.inStock}
-          className="flex-1 flex items-center justify-center gap-2 py-4 bg-white border-r border-copper/20 text-copper font-bold text-sm transition disabled:opacity-50"
+          className="flex-1 flex items-center justify-center gap-2 bg-white border-r border-copper/20 text-copper font-bold text-sm transition active:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <CreditCard size={18} />
           Buy Now
@@ -60,12 +67,23 @@ export default function StickyBuyBar({ variant, onAddToCart, onBuyNow }) {
         <button
           onClick={() => onAddToCart(variant, 1)}
           disabled={!variant?.inStock}
-          className="flex-1 flex items-center justify-center gap-2 py-4 bg-copper text-white font-bold text-sm transition hover:bg-heritage disabled:opacity-50"
+          className="flex-1 flex items-center justify-center gap-2 bg-copper text-white font-bold text-sm transition active:bg-heritage disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <ShoppingBag size={18} />
           Add to Bag
         </button>
       </div>
     </div>
+  );
+
+  // Use Portal to render outside of any potential overflow/transform parents
+  if (!mounted) return null;
+
+  return (
+    <>
+      {createPortal(content, document.body)}
+      {/* Spacer to prevent content from being hidden behind the bar */}
+      <div className="h-16 lg:hidden" />
+    </>
   );
 }

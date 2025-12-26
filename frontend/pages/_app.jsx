@@ -8,6 +8,7 @@ import AnnouncementBar from '../components/AnnouncementBar';
 import SpinWheelPopup from '../components/SpinWheelPopup';
 import { useRouter } from 'next/router';
 import { CartProvider } from '../context/CartContext';
+import MobileBottomNav from '../components/MobileBottomNav';
 
 function MyApp({ Component, pageProps }) {
   const router = useRouter();
@@ -52,15 +53,29 @@ function MyApp({ Component, pageProps }) {
   return (
     <>
       <Head>
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, viewport-fit=cover" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+        <meta name="theme-color" content="#F4E6D8" />
         <link rel="icon" href="/varaha-assets/loader.jpg" />
       </Head>
       <CartProvider>
         {isHomePage && <DeliveryBar variant="desktop" />}
         {!isHomePage && <AnnouncementBar />}
-        <Component {...pageProps} />
+
+        {/* Main Content with Transition */}
+        <div className="page-transition-enter-active">
+          <Component {...pageProps} />
+        </div>
+
         <CookieConsent />
         <SpinWheelPopup />
+
+        {/* Mobile Bottom Nav - Hidden on Product & Checkout Pages */}
+        {!router.pathname.startsWith('/product/') && router.pathname !== '/checkout' && (
+          <MobileBottomNav />
+        )}
+
       </CartProvider>
     </>
   );

@@ -10,14 +10,12 @@ import TestimonialsSection from '../components/homepage/TestimonialsSection';
 import CreatorShowcase from '../components/homepage/CreatorShowcase';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
-import PremiumLoader from '../components/PremiumLoader';
 import LaunchCountdown from '../components/LaunchCountdown';
 import AddToCartModal from '../components/AddToCartModal';
 import BackToTop from '../components/BackToTop';
 import DeliveryBar from '../components/DeliveryBar';
 
 export default function Home() {
-  const [isLoading, setIsLoading] = useState(true);
   const [showFullPageCountdown, setShowFullPageCountdown] = useState(true);
   const [userSkipped, setUserSkipped] = useState(false);
   const router = useRouter();
@@ -201,13 +199,11 @@ export default function Home() {
         />
       </Head>
 
-      <PremiumLoader onComplete={() => setIsLoading(false)} />
-
-      {!isLoading && showFullPageCountdown && (
+      {showFullPageCountdown && (
         <LaunchCountdown onSkip={handleSkip} />
       )}
 
-      {!isLoading && !showFullPageCountdown && (
+      {!showFullPageCountdown && (
         <>
           <Header
             cartCount={cartCount}

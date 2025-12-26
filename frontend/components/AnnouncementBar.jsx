@@ -65,7 +65,7 @@ export default function AnnouncementBar({ showCountdown = true }) {
   if (isDismissed) return null;
 
   return (
-    <div className="sticky top-0 z-50 bg-gradient-to-r from-heritage via-copper to-heritage text-warm-sand py-1.5 px-2 border-b border-warm-sand/20 shadow-sm">
+    <div className="relative z-50 bg-gradient-to-r from-heritage via-copper to-heritage text-warm-sand py-1.5 px-2 border-b border-warm-sand/20 shadow-sm">
       <div className="max-w-7xl mx-auto flex items-center justify-center">
         {showCountdown ? (
           <div className="flex items-center justify-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs">

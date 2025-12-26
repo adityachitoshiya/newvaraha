@@ -208,9 +208,12 @@ export default function SpinWheelPopup() {
                             clipPath: `polygon(50% 50%, 50% 0%, ${50 + 50 * Math.sin((360 / OFFERS.length) * Math.PI / 180)}% ${50 - 50 * Math.cos((360 / OFFERS.length) * Math.PI / 180)}%)`
                           }}
                         >
-                          <div className={`w-full h-full ${offer.color} flex items-start justify-center pt-8`}>
+                          <div
+                            className={`w-full h-full ${offer.color} flex items-start justify-center pt-8`}
+                            style={{ transform: `rotate(${360 / OFFERS.length / 2}deg)` }}
+                          >
                             <span
-                              className="font-bold text-xs sm:text-sm tracking-wider uppercase transform -rotate-[0deg] pt-2"
+                              className="font-bold text-xs sm:text-sm tracking-wider uppercase pt-4"
                               style={{ textShadow: '0 1px 2px rgba(0,0,0,0.1)' }}
                             >
                               {offer.label}

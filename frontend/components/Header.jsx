@@ -156,10 +156,10 @@ export default function Header({ cartCount = 0, onCartClick }) {
                 <Search size={22} />
               </button>
 
-              {/* Wishlist - Visible on all devices */}
+              {/* Wishlist - Visible on desktop only now (moved to bottom nav for mobile) */}
               <Link
                 href="/wishlist"
-                className="relative flex items-center justify-center w-10 h-10 text-heritage hover:text-copper transition-colors duration-200 group flex-shrink-0"
+                className="hidden lg:flex relative items-center justify-center w-10 h-10 text-heritage hover:text-copper transition-colors duration-200 group flex-shrink-0"
                 aria-label="Wishlist"
               >
                 <Heart size={18} className="sm:w-5 sm:h-5 group-hover:fill-current transition-all duration-200" />
@@ -184,8 +184,8 @@ export default function Header({ cartCount = 0, onCartClick }) {
                 )}
               </button>
 
-              {/* User Profile / Login */}
-              <div className="relative">
+              {/* User Profile / Login - Visible on desktop only (moved to bottom nav for mobile) */}
+              <div className="hidden lg:block relative">
                 {user ? (
                   <button
                     onClick={() => router.push('/account')}

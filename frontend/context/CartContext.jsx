@@ -122,18 +122,21 @@ export function CartProvider({ children }) {
     };
 
     const removeFromCart = async (itemId, variantSku) => {
-        // itemId might be DB id (if from server) or undefined (if local)
-        // We filter by variantSku mainly
-
-        // 1. Optimistic
-        const itemToRemove = cartItems.find(item => item.variant.sku === variantSku);
-        setCartItems(prev => prev.filter(item => item.variant.sku !== variantSku));
+        // 1. Optimistic Update (Handle both ID and SKU matches)
+        setCartItems(prev => prev.filter(item => {
+            // If SKU matches, remove it
+            if (variantSku && item.variant?.sku === variantSku) return false;
+            // If ID matches, remove it
+            if (itemId && item.id === itemId) return false;
+            // Keep otherwise
+            return true;
+        }));
 
         // 2. Server Update
-        if (token && itemToRemove && itemToRemove.id) {
+        if (token && itemId) {
             try {
                 const API_URL = getApiUrl();
-                await fetch(`${API_URL}/api/cart/items/${itemToRemove.id}`, {
+                await fetch(`${API_URL}/api/cart/items/${itemId}`, {
                     method: 'DELETE',
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
@@ -141,38 +144,33 @@ export function CartProvider({ children }) {
         }
     };
 
-    const updateQuantity = async (variantSku, newQty) => {
+    const updateQuantity = async (variantSku, newQty, itemId) => {
         if (newQty <= 0) {
-            return removeFromCart(null, variantSku);
+            return removeFromCart(itemId, variantSku);
         }
 
-        // 1. Optimistic
-        const itemToUpdate = cartItems.find(item => item.variant.sku === variantSku);
-        setCartItems(prev => prev.map(item =>
-            item.variant.sku === variantSku ? { ...item, quantity: newQty } : item
-        ));
+        // 1. Optimistic Update
+        let itemToUpdate = null;
+
+        setCartItems(prev => prev.map(item => {
+            const matchesSku = variantSku && item.variant?.sku === variantSku;
+            const matchesId = itemId && item.id === itemId;
+
+            if (matchesSku || matchesId) {
+                itemToUpdate = item;
+                return { ...item, quantity: newQty };
+            }
+            return item;
+        }));
 
         // 2. Server Update
         if (token && itemToUpdate && itemToUpdate.id) {
             try {
                 const API_URL = getApiUrl();
-                await fetch(`${API_URL}/api/cart/items/${itemToUpdate.id}`, {
-                    method: 'PUT',
-                    headers: { 'Authorization': `Bearer ${token}` },
-                    params: { quantity: newQty } // Wait, PUT /items/{id}?quantity=... 
-                    // In main.py: update_cart_item(item_id, quantity) -> Query param or Body?
-                    // FastAPI default for simple types is Query param unless Body() used. I didn't verify main.py sig.
-                    // Let's check main.py logic: def update_cart_item(item_id: int, quantity: int...) 
-                    // This means query param by default.
-                }) // Need to construct URL correctly
-                    + `?quantity=${newQty}` // Fix this in fetch call
-
-                // Re-doing fetch securely
                 await fetch(`${API_URL}/api/cart/items/${itemToUpdate.id}?quantity=${newQty}`, {
                     method: 'PUT',
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
-
             } catch (e) { console.error(e); }
         }
     };

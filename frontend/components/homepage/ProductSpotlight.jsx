@@ -86,28 +86,37 @@ export default function ProductSpotlight() {
         <div className="absolute bottom-10 right-10 w-96 h-96 bg-heritage rounded-full blur-[120px]"></div>
       </div>
 
+      <style jsx>{`
+        @keyframes float {
+          0%, 100% { transform: translateY(0px); }
+          50% { transform: translateY(-15px); }
+        }
+        .animate-float {
+          animation: float 6s ease-in-out infinite;
+        }
+      `}</style>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
 
         {/* Header */}
         <div
           ref={ref}
-          className={`text-center mb-16 transition-all duration-1000 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10'}`}
+          className={`text-center mb-16 transition-all duration-1000 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-100 translate-y-0'}`}
         >
-          <span className="text-copper font-medium tracking-[0.2em] uppercase text-sm mb-2 block">
+          <span className="text-copper font-medium tracking-[0.2em] uppercase text-sm mb-2 block animate-pulse">
             {hasFeaturedProducts ? 'Exquisite Collection' : 'Fresh Designs'}
           </span>
-          <h2 className="font-royal text-5xl md:text-7xl font-bold text-heritage mb-6">
+          <h2 className="font-royal text-5xl md:text-7xl font-bold text-heritage mb-6 drop-shadow-sm">
             {hasFeaturedProducts ? 'Featured Masterpieces' : 'New Arrivals'}
           </h2>
         </div>
 
         {/* Main Showcase */}
-        <div className={`relative transition-all duration-1000 delay-200 ${isVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}>
+        <div className={`relative transition-all duration-1000 delay-200 ${isVisible ? 'opacity-100 scale-100' : 'opacity-100 scale-100'}`}>
           <div className="grid lg:grid-cols-12 gap-8 items-center">
 
-            {/* Image Area - Spans 7 cols */}
-            <div className="lg:col-span-7 relative group">
-              <div className="aspect-[4/5] md:aspect-[16/10] lg:h-[600px] w-full relative rounded-2xl overflow-hidden shadow-2xl shadow-copper/10">
+            {/* Image Area - Spans 7 cols - WITH FLOATING EFFECT */}
+            <div className="lg:col-span-7 relative group animate-float">
+              <div className="aspect-[4/5] md:aspect-[16/10] lg:h-[600px] w-full relative rounded-2xl overflow-hidden shadow-[0_20px_50px_-12px_rgba(183,110,121,0.3)] border border-white/20">
                 <img
                   src={currentProduct.image}
                   alt={currentProduct.name}
@@ -121,12 +130,12 @@ export default function ProductSpotlight() {
                 {/* Tags on Image */}
                 <div className="absolute top-6 left-6 flex gap-2">
                   {currentProduct.premium && (
-                    <span className="px-4 py-1 bg-white/90 backdrop-blur-md text-heritage text-xs font-bold uppercase tracking-wider rounded-sm">
+                    <span className="px-4 py-1 bg-white/90 backdrop-blur-md text-heritage text-xs font-bold uppercase tracking-wider rounded-sm shadow-lg">
                       Premium
                     </span>
                   )}
                   {currentProduct.tag && (
-                    <span className="px-4 py-1 bg-copper/90 backdrop-blur-md text-white text-xs font-bold uppercase tracking-wider rounded-sm">
+                    <span className="px-4 py-1 bg-copper/90 backdrop-blur-md text-white text-xs font-bold uppercase tracking-wider rounded-sm shadow-lg">
                       {currentProduct.tag}
                     </span>
                   )}
@@ -135,15 +144,13 @@ export default function ProductSpotlight() {
             </div>
 
             {/* Content Area - Floating Glass Card - Spans 5 cols */}
-            <div className="lg:col-span-5 lg:-ml-12 relative z-20">
-              <div className="bg-white/80 backdrop-blur-xl border border-white/50 p-8 md:p-12 rounded-2xl shadow-xl">
+            <div className="lg:col-span-5 lg:-ml-12 relative z-20 mt-8 lg:mt-0">
+              <div className="bg-white/80 backdrop-blur-xl border border-white/60 p-8 md:p-12 rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] hover:shadow-[0_8px_30px_rgb(183,110,121,0.2)] transition-shadow duration-500">
                 <div className="flex items-center gap-2 text-copper mb-4">
-                  <Star size={16} fill="currentColor" />
-                  <Star size={16} fill="currentColor" />
-                  <Star size={16} fill="currentColor" />
-                  <Star size={16} fill="currentColor" />
-                  <Star size={16} fill="currentColor" />
-                  <span className="text-xs text-gray-500 font-medium ml-2">(Bestseller)</span>
+                  {[...Array(5)].map((_, i) => (
+                    <Star key={i} size={16} fill="currentColor" />
+                  ))}
+                  <span className="text-xs text-gray-500 font-medium ml-2 uppercase tracking-wide">(Bestseller)</span>
                 </div>
 
                 <h3 className="font-royal text-4xl md:text-5xl font-bold text-heritage mb-6 leading-[1.1]">
@@ -163,28 +170,28 @@ export default function ProductSpotlight() {
                 <div className="flex flex-col sm:flex-row gap-4">
                   <Link
                     href={`/product/${currentProduct.id}`}
-                    className="flex-1 py-4 bg-heritage text-white text-center rounded-lg font-medium hover:bg-copper transition-colors flex items-center justify-center gap-2 group"
+                    className="flex-1 py-4 bg-heritage text-white text-center rounded-lg font-medium hover:bg-copper transition-colors flex items-center justify-center gap-2 group shadow-lg shadow-heritage/20"
                   >
                     Shop Now
                     <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
                   </Link>
                   <Link
                     href={`/product/${currentProduct.id}`}
-                    className="px-6 py-4 border border-heritage/20 text-heritage rounded-lg hover:bg-heritage/5 transition-colors flex items-center justify-center"
+                    className="px-6 py-4 border border-heritage/20 text-heritage rounded-lg hover:bg-heritage/5 transition-colors flex items-center justify-center group"
                   >
-                    <ShoppingBag size={20} />
+                    <ShoppingBag size={20} className="group-hover:scale-110 transition-transform" />
                   </Link>
                 </div>
 
               </div>
 
               {/* Thumbnails Navigation */}
-              <div className="mt-8 flex gap-4 overflow-x-auto pb-2 hide-scrollbar">
+              <div className="mt-8 flex gap-4 overflow-x-auto pb-4 hide-scrollbar px-1">
                 {products.map((p, idx) => (
                   <button
                     key={p.id}
                     onClick={() => setCurrentIndex(idx)}
-                    className={`flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 transition-all ${idx === currentIndex ? 'border-copper scale-105 shadow-md' : 'border-transparent opacity-60 hover:opacity-100'}`}
+                    className={`flex-shrink-0 w-20 h-20 rounded-xl overflow-hidden border-2 transition-all duration-300 ${idx === currentIndex ? 'border-copper scale-110 shadow-lg ring-2 ring-copper/20' : 'border-transparent opacity-60 hover:opacity-100 hover:scale-105'}`}
                   >
                     <img
                       src={p.image}

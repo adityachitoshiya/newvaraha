@@ -3,8 +3,6 @@
   "/_document": "pages/_document.js",
   "/_error": "pages/_error.js",
   "/": "pages/index.js",
-  "/payment-success": "pages/payment-success.js",
-  "/new-arrivals": "pages/new-arrivals.js",
-  "/shop": "pages/shop.js",
-  "/account": "pages/account.js"
+  "/wishlist": "pages/wishlist.js",
+  "/payment-success": "pages/payment-success.js"
 }

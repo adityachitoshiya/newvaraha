@@ -84,6 +84,42 @@ export default function PaymentSuccess() {
     }
   }, [router.query]);
 
+  // Preload Audio to prevent delay
+  const [successAudio] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const audio = new Audio('/varaha-assets/Success.mp3');
+      audio.preload = 'auto';
+      audio.load();
+      return audio;
+    }
+    return null;
+  });
+
+  // Play Success Audio with Interaction Fallback
+  useEffect(() => {
+    if (orderDetails && successAudio) {
+      const playAudio = async () => {
+        try {
+          successAudio.currentTime = 0;
+          await successAudio.play();
+          console.log('Audio played successfully');
+        } catch (err) {
+          console.log('Autoplay blocked. Waiting for interaction.', err);
+          // Add one-time click listener to play sound if blocked
+          const enableAudio = () => {
+            successAudio.play().catch(e => console.error('Audio interaction play failed', e));
+            document.removeEventListener('click', enableAudio);
+            document.removeEventListener('touchstart', enableAudio);
+          };
+          document.addEventListener('click', enableAudio);
+          document.addEventListener('touchstart', enableAudio);
+        }
+      };
+
+      playAudio();
+    }
+  }, [orderDetails, successAudio]);
+
   // ... (keep useEffect for countdown)
 
   if (!orderDetails) {

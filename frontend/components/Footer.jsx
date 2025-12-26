@@ -77,7 +77,7 @@ export default function Footer() {
   };
 
   return (
-    <footer className="relative bg-gradient-to-b from-heritage via-heritage to-black text-warm-sand pb-20 lg:pb-0 border-t-2 border-copper overflow-hidden">
+    <footer className="relative bg-gradient-to-b from-heritage via-heritage to-black text-warm-sand pb-32 lg:pb-0 border-t-2 border-copper overflow-hidden">
       {/* Animated Background Pattern */}
       <div className="absolute inset-0 opacity-5">
         <div className="absolute top-10 left-10 animate-float-slow">

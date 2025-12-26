@@ -164,7 +164,7 @@ export default function Shop() {
                     </div>
 
                     {/* Controls Bar */}
-                    <div className="bg-white p-4 rounded-sm border border-copper/20 mb-8 sticky top-20 z-10 shadow-sm flex flex-col md:flex-row gap-4 justify-between items-center">
+                    <div className="bg-white p-4 rounded-sm border border-copper/20 mb-8 lg:sticky lg:top-20 z-10 shadow-sm flex flex-col md:flex-row gap-4 justify-between items-center">
                         <div className="flex items-center gap-4 w-full md:w-auto">
                             <button
                                 onClick={() => setShowFilters(!showFilters)}
@@ -196,16 +196,16 @@ export default function Shop() {
                                 <option value="name">Name: A-Z</option>
                             </select>
 
-                            <div className="flex border border-gray-200 rounded-sm overflow-hidden">
+                            <div className="flex border border-gray-200 rounded-sm overflow-hidden h-10">
                                 <button
                                     onClick={() => setViewMode('grid')}
-                                    className={`p-2 ${viewMode === 'grid' ? 'bg-copper text-white' : 'hover:bg-gray-50'}`}
+                                    className={`w-10 flex items-center justify-center ${viewMode === 'grid' ? 'bg-copper text-white' : 'hover:bg-gray-50'}`}
                                 >
                                     <Grid size={20} />
                                 </button>
                                 <button
                                     onClick={() => setViewMode('list')}
-                                    className={`p-2 ${viewMode === 'list' ? 'bg-copper text-white' : 'hover:bg-gray-50'}`}
+                                    className={`w-10 flex items-center justify-center ${viewMode === 'list' ? 'bg-copper text-white' : 'hover:bg-gray-50'}`}
                                 >
                                     <List size={20} />
                                 </button>
@@ -355,7 +355,7 @@ export default function Shop() {
                                                 )}
                                                 <button
                                                     onClick={() => toggleWishlist(product.id, product.name)}
-                                                    className="absolute top-3 right-3 p-2 bg-white/90 rounded-full hover:bg-white transition-colors z-10"
+                                                    className="absolute top-3 right-3 p-2 bg-white/90 rounded-full hover:bg-white transition-colors z-10 flex items-center justify-center"
                                                 >
                                                     <Heart
                                                         size={20}
