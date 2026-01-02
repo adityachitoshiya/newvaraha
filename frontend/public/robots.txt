@@ -1,0 +1,28 @@
+# Varaha Jewels - Robots.txt
+User-agent: *
+Allow: /
+Allow: /product/
+Allow: /contact
+Allow: /checkout
+Disallow: /admin
+Disallow: /api/
+Disallow: /orders
+
+# Sitemap
+Sitemap: https://varahajewels.vercel.app/sitemap.xml
+
+# Crawl Delay
+Crawl-delay: 1
+
+# Popular Search Engines
+User-agent: Googlebot
+Allow: /
+
+User-agent: Googlebot-Image
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: Slurp
+Allow: /

@@ -1,0 +1,338 @@
+from fastapi import APIRouter, Depends, HTTPException
+from sqlmodel import Session, select
+from typing import List, Dict
+from datetime import datetime
+
+# Internal Imports
+from database import get_session
+from models import Address, Wishlist, Product, Customer, OrderReturn
+from dependencies import get_current_user
+
+router = APIRouter()
+
+# --- Wishlist ---
+
+@router.get("/api/wishlist", response_model=List[Dict])
+def get_wishlist(
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Get user's wishlist with product details"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    customer_id = current_user.id
+    wishlist_items = session.exec(
+        select(Wishlist).where(Wishlist.customer_id == customer_id)
+    ).all()
+    
+    # Fetch product details
+    result = []
+    for item in wishlist_items:
+        product = session.get(Product, item.product_id)
+        if product:
+            result.append({
+                "id": item.id,
+                "product_id": item.product_id,
+                "added_at": item.added_at.isoformat(),
+                "product": {
+                    "id": product.id,
+                    "name": product.name,
+                    "price": product.price,
+                    "image": product.image,
+                    "category": product.category,
+                    "metal": product.metal,
+                    "premium": product.premium
+                }
+            })
+    
+    return result
+
+@router.post("/api/wishlist")
+def add_to_wishlist(
+    product_id: str,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Add product to wishlist"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    customer_id = current_user.id
+    
+    # Check if product exists
+    product = session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    
+    # Check if already in wishlist
+    existing = session.exec(
+        select(Wishlist).where(
+            Wishlist.customer_id == customer_id,
+            Wishlist.product_id == product_id
+        )
+    ).first()
+    
+    if existing:
+        return {"message": "Already in wishlist", "id": existing.id}
+    
+    # Add to wishlist
+    wishlist_item = Wishlist(
+        customer_id=customer_id,
+        product_id=product_id
+    )
+    session.add(wishlist_item)
+    session.commit()
+    session.refresh(wishlist_item)
+    
+    return {
+        "message": "Added to wishlist",
+        "id": wishlist_item.id,
+        "product_id": product_id
+    }
+
+@router.delete("/api/wishlist/{product_id}")
+def remove_from_wishlist(
+    product_id: str,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Remove product from wishlist"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    customer_id = current_user.id
+    
+    wishlist_item = session.exec(
+        select(Wishlist).where(
+            Wishlist.customer_id == customer_id,
+            Wishlist.product_id == product_id
+        )
+    ).first()
+    
+    if not wishlist_item:
+        raise HTTPException(status_code=404, detail="Item not in wishlist")
+    
+    session.delete(wishlist_item)
+    session.commit()
+    
+    return {"message": "Removed from wishlist"}
+
+@router.post("/api/wishlist/sync")
+def sync_wishlist(
+    product_ids: List[str],
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Sync local wishlist to server (merge on login)"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    customer_id = current_user.id
+    added_count = 0
+    
+    for product_id in product_ids:
+        # Check if already exists
+        existing = session.exec(
+            select(Wishlist).where(
+                Wishlist.customer_id == customer_id,
+                Wishlist.product_id == product_id
+            )
+        ).first()
+        
+        if not existing:
+            # Verify product exists
+            product = session.get(Product, product_id)
+            if product:
+                wishlist_item = Wishlist(
+                    customer_id=customer_id,
+                    product_id=product_id
+                )
+                session.add(wishlist_item)
+                added_count += 1
+    
+    session.commit()
+    return {"message": f"Synced {added_count} items to wishlist"}
+
+# --- Address ---
+
+@router.get("/api/addresses", response_model=List[Address])
+def get_addresses(
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Get all addresses for current user"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    addresses = session.exec(
+        select(Address)
+        .where(Address.customer_id == current_user.id)
+        .order_by(Address.is_default.desc(), Address.created_at.desc())
+    ).all()
+    
+    return addresses
+
+@router.post("/api/addresses", response_model=Address)
+def add_address(
+    address_data: Address,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Add new address"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # If this is the first address or marked as default, unset other defaults
+    if address_data.is_default:
+        existing_defaults = session.exec(
+            select(Address).where(
+                Address.customer_id == current_user.id,
+                Address.is_default == True
+            )
+        ).all()
+        
+        for addr in existing_defaults:
+            addr.is_default = False
+            session.add(addr)
+    
+    # Create new address
+    new_address = Address(
+        customer_id=current_user.id,
+        label=address_data.label,
+        full_name=address_data.full_name,
+        phone=address_data.phone,
+        address_line1=address_data.address_line1,
+        address_line2=address_data.address_line2,
+        city=address_data.city,
+        state=address_data.state,
+        pincode=address_data.pincode,
+        country=address_data.country or "India",
+        is_default=address_data.is_default,
+        address_type=address_data.address_type or "both"
+    )
+    
+    session.add(new_address)
+    session.commit()
+    session.refresh(new_address)
+    
+    return new_address
+
+@router.put("/api/addresses/{address_id}", response_model=Address)
+def update_address(
+    address_id: int,
+    address_data: Address,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Update existing address"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    address = session.get(Address, address_id)
+    if not address or address.customer_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Address not found")
+    
+    # If setting as default, unset others
+    if address_data.is_default and not address.is_default:
+        existing_defaults = session.exec(
+            select(Address).where(
+                Address.customer_id == current_user.id,
+                Address.is_default == True
+            )
+        ).all()
+        
+        for addr in existing_defaults:
+            addr.is_default = False
+            session.add(addr)
+    
+    # Update fields
+    address.label = address_data.label
+    address.full_name = address_data.full_name
+    address.phone = address_data.phone
+    address.address_line1 = address_data.address_line1
+    address.address_line2 = address_data.address_line2
+    address.city = address_data.city
+    address.state = address_data.state
+    address.pincode = address_data.pincode
+    address.country = address_data.country or "India"
+    address.is_default = address_data.is_default
+    address.address_type = address_data.address_type
+    address.updated_at = datetime.utcnow()
+    
+    session.add(address)
+    session.commit()
+    session.refresh(address)
+    
+    return address
+
+@router.delete("/api/addresses/{address_id}")
+def delete_address(
+    address_id: int,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Delete address"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    address = session.get(Address, address_id)
+    if not address or address.customer_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Address not found")
+    
+    session.delete(address)
+    session.commit()
+    
+    return {"message": "Address deleted successfully"}
+
+
+@router.put("/api/addresses/{address_id}/default")
+def set_default_address(
+    address_id: int,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Set address as default"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    address = session.get(Address, address_id)
+    if not address or address.customer_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Address not found")
+    
+    # Unset all other defaults
+    existing_defaults = session.exec(
+        select(Address).where(
+            Address.customer_id == current_user.id,
+            Address.is_default == True
+        )
+    ).all()
+    
+    for addr in existing_defaults:
+        addr.is_default = False
+        session.add(addr)
+    
+    # Set this as default
+    address.is_default = True
+    session.add(address)
+    session.commit()
+    session.refresh(address)
+    
+    return address
+
+@router.get("/api/customer/returns", response_model=List[OrderReturn])
+def get_customer_returns(
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Get customer's return requests"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    returns = session.exec(
+        select(OrderReturn)
+        .where(OrderReturn.customer_id == current_user.id)
+        .order_by(OrderReturn.created_at.desc())
+    ).all()
+    
+    return returns

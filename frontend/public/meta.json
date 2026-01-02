@@ -1,0 +1,12 @@
+{
+  "name": "Varaha Jewels",
+  "short_name": "Varaha",
+  "description": "Premium Indian jewelry store offering exquisite heritage collections, bridal jewelry, gold ornaments, and traditional designs.",
+  "version": "1.0.0",
+  "author": "Varaha Jewels",
+  "url": "https://varahajewels.vercel.app",
+  "image": "/varaha-assets/logo.png",
+  "category": "Jewelry & Shopping",
+  "locale": "en_IN",
+  "type": "website"
+}

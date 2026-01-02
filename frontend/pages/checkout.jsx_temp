@@ -1,0 +1,8 @@
+      const API_URL = getApiUrl();
+      // Changed from POST /api/validate-coupon to GET /api/coupons/param/{code} to match backend
+      const res = await fetch(`${API_URL}/api/coupons/param/${couponCode}`);
+
+      if (res.ok) {
+        const data = await res.json();
+        setAppliedCoupon(data); // Store full coupon object: { code, discount_type, discount_value }
+      } else {
