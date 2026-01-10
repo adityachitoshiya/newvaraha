@@ -96,9 +96,9 @@ def telegram_login(data: TelegramAuth, session: Session = Depends(get_session)):
     secret_key = hashlib.sha256(BOT_TOKEN.encode()).digest()
     hash_payload = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
     
-    # Check if hash matches usually, but for development with dummy token we might skip or fail
-    # if hash_payload != data.hash:
-    #     raise HTTPException(status_code=400, detail="Data integrity check failed")
+    # Check if hash matches
+    if hash_payload != data.hash:
+        raise HTTPException(status_code=400, detail="Data integrity check failed")
 
     # 2. Check/Create User
     telegram_id = str(data.id)
