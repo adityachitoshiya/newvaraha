@@ -11,6 +11,10 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+from database import engine
+from sqlmodel import Session, select
+from models import Order
+
 def send_order_notifications(order_data):
     """
     Triggers email and Telegram notifications when a new order is received.
@@ -289,6 +293,17 @@ def send_order_notifications(order_data):
                             
                 logger.info(f"Email notifications sent to Admin ({admin_email}) and Customer ({customer_email})")
                 
+                # UPDATE DB STATUS: SUCCESS
+                if customer_email:
+                    with Session(engine) as session:
+                        statement = select(Order).where(Order.order_id == order_data.get('order_id'))
+                        order_record = session.exec(statement).first()
+                        if order_record:
+                            order_record.email_status = "sent"
+                            session.add(order_record)
+                            session.commit()
+                            logger.info(f"Updated Order {order_record.order_id} email_status to 'sent'")
+                
             except smtplib.SMTPAuthenticationError as auth_err:
                  logger.error(f"❌ SMTP Auth Error: {auth_err.smtp_code} - {auth_err.smtp_error}")
                  logger.error("Double check your EMAIL_FROM and EMAIL_PASSWORD in .env")
@@ -301,6 +316,19 @@ def send_order_notifications(order_data):
             
     except Exception as e:
         logger.error(f"Failed to send email notification: {str(e)}")
+        
+        # UPDATE DB STATUS: FAILED
+        try:
+            with Session(engine) as session:
+                statement = select(Order).where(Order.order_id == order_data.get('order_id'))
+                order_record = session.exec(statement).first()
+                if order_record:
+                    order_record.email_status = "failed"
+                    session.add(order_record)
+                    session.commit()
+                    logger.error(f"Updated Order {order_record.order_id} email_status to 'failed'")
+        except Exception as db_err:
+             logger.error(f"Failed to update DB status to failed: {str(db_err)}")
         # Re-raise for test endpoint to catch
         if order_data.get('is_test'):
              raise e

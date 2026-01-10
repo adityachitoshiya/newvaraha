@@ -34,6 +34,7 @@ class OrderBase(SQLModel):
     pincode: str
     total_amount: float
     status: str = "pending"
+    email_status: str = "pending" # pending, sent, failed
     payment_method: str = "cod"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     items_json: str
