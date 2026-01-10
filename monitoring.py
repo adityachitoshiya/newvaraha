@@ -21,7 +21,17 @@ class ServerMonitor:
         self.recent_crashes = deque(maxlen=10)
         # Keep last 10 slow routes
         self.slow_routes = deque(maxlen=10)
+        # Keep last 100 logs
+        self.logs = deque(maxlen=100)
     
+    def log_message(self, source, level, message):
+        self.logs.appendleft({
+            "timestamp": datetime.now().strftime("%I:%M:%S %p"),
+            "source": source, # 'BACKEND' or 'FRONTEND'
+            "level": level,   # 'INFO', 'ERROR', 'WARN'
+            "message": str(message)
+        })
+
     def get_uptime(self):
         uptime_seconds = time.time() - self.start_time
         hours = int(uptime_seconds // 3600)

@@ -33,6 +33,23 @@ async def dashboard_ui(request: Request, session: Session = Depends(get_session)
         health_color = "#e74c3c"
 
     # 4. Render HTML (Server Side Rendering)
+    # 5. Render Console Logs
+    console_logs_html = ""
+    for log in monitor.logs:
+        color = "#2ecc71" # Green (Info)
+        if log['level'] == 'ERROR': color = "#e74c3c" # Red
+        elif log['level'] == 'WARN': color = "#f1c40f" # Yellow
+        
+        source_color = "#3498db" if log['source'] == 'FRONTEND' else "#9b59b6"
+
+        console_logs_html += f"""
+            <div style="font-family: 'Courier New', monospace; font-size: 13px; margin-bottom: 4px; border-bottom: 1px solid #333; padding-bottom: 2px;">
+                <span style="color: #666;">[{log['timestamp']}]</span>
+                <span style="color: {source_color}; font-weight: bold;">[{log['source']}]</span>
+                <span style="color: {color};">{log['message']}</span>
+            </div>
+        """
+
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -150,6 +167,17 @@ async def dashboard_ui(request: Request, session: Session = Depends(get_session)
                 font-weight: bold;
                 background: #444;
             }}
+
+            .console-box {{
+                background: #000;
+                border: 1px solid #333;
+                border-radius: 8px;
+                padding: 15px;
+                height: 300px;
+                overflow-y: auto;
+                font-family: 'Courier New', monospace;
+                box-shadow: inset 0 0 20px rgba(0,0,0,0.5);
+            }}
             
         </style>
     </head>
@@ -190,6 +218,13 @@ async def dashboard_ui(request: Request, session: Session = Depends(get_session)
                  <div class="card">
                     <h3>Errors (500)</h3>
                     <div class="value { 'status-bad' if monitor.status_codes['500'] > 0 else 'status-ok' }">{monitor.status_codes['500']}</div>
+                </div>
+            </div>
+            
+            <h2 class="section-title">🖥️ Live Console Logs</h2>
+            <div class="logs-section" style="padding:0; background:transparent; border:none;">
+                <div class="console-box">
+                    {console_logs_html if console_logs_html else '<div style="color:#666; text-align:center; padding-top:100px;">Waiting for logs...</div>'}
                 </div>
             </div>
 
@@ -249,3 +284,14 @@ async def dashboard_ui(request: Request, session: Session = Depends(get_session)
     """
     
     return html_content
+
+from pydantic import BaseModel
+
+class FrontendLog(BaseModel):
+    level: str
+    message: str
+
+@router.post("/api/log-frontend")
+async def log_frontend(log: FrontendLog):
+    monitor.log_message("FRONTEND", log.level, log.message)
+    return {"status": "ok"}

@@ -11,6 +11,20 @@ from middleware import MonitoringMiddleware
 # Import Routers
 from routes import auth, products, orders, cart, gateways, admin, settings, customer, coupons, analytics, web, health, dashboard
 
+import logging
+from monitoring import monitor
+
+# Custom Log Handler
+class DashboardHandler(logging.Handler):
+    def emit(self, record):
+        log_entry = self.format(record)
+        monitor.log_message("BACKEND", record.levelname, log_entry)
+
+# Config Logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger()
+logger.addHandler(DashboardHandler())
+
 app = FastAPI(
     title="Varaha Jewels API",
     description="Backend API for Varaha Jewels E-commerce Platform",
