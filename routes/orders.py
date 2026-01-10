@@ -207,95 +207,101 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
 
 @router.post("/api/update-order-status")
 def update_order_status_callback(payload: Dict[str, Any], background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
-    # Verify Razorpay Signature for Security
-    # 1. Get Payment Data
-    razorpay_payment_id = payload.get("razorpay_payment_id")
-    razorpay_order_id = payload.get("razorpay_order_id")
-    razorpay_signature = payload.get("razorpay_signature")
-    order_data = payload.get("order_data")
-    
-    if not order_data or not razorpay_payment_id or not razorpay_order_id or not razorpay_signature:
-         raise HTTPException(status_code=400, detail="Missing payment data")
-
-    # 2. Get Active Gateway Secret
-    gateway = session.exec(select(PaymentGateway).where(PaymentGateway.is_active == True)).first()
-    if not gateway or gateway.provider != "razorpay":
-        raise HTTPException(status_code=500, detail="Active gateway configuration error")
-    
-    creds = json.loads(gateway.credentials_json)
-    key_secret = creds.get("key_secret")
-
-    # 3. Verify Signature
     try:
-        client = razorpay.Client(auth=(creds.get("key_id"), key_secret))
+        # Verify Razorpay Signature for Security
+        # 1. Get Payment Data
+        razorpay_payment_id = payload.get("razorpay_payment_id")
+        razorpay_order_id = payload.get("razorpay_order_id")
+        razorpay_signature = payload.get("razorpay_signature")
+        order_data = payload.get("order_data")
         
-        params_dict = {
-            'razorpay_order_id': razorpay_order_id,
-            'razorpay_payment_id': razorpay_payment_id,
-            'razorpay_signature': razorpay_signature
-        }
+        if not order_data or not razorpay_payment_id or not razorpay_order_id or not razorpay_signature:
+             raise HTTPException(status_code=400, detail="Missing payment data")
+
+        # 2. Get Active Gateway Secret
+        gateway = session.exec(select(PaymentGateway).where(PaymentGateway.is_active == True)).first()
+        if not gateway or gateway.provider != "razorpay":
+            raise HTTPException(status_code=500, detail="Active gateway configuration error")
         
-        # This will raise SignatureVerificationError if fails
-        client.utility.verify_payment_signature(params_dict)
+        creds = json.loads(gateway.credentials_json)
+        key_secret = creds.get("key_secret")
+
+        # 3. Verify Signature
+        try:
+            client = razorpay.Client(auth=(creds.get("key_id"), key_secret))
+            
+            params_dict = {
+                'razorpay_order_id': razorpay_order_id,
+                'razorpay_payment_id': razorpay_payment_id,
+                'razorpay_signature': razorpay_signature
+            }
+            
+            # This will raise SignatureVerificationError if fails
+            client.utility.verify_payment_signature(params_dict)
+            
+        except Exception as e:
+            print(f"Signature Verification Failed: {e}")
+            raise HTTPException(status_code=400, detail="Invalid Payment Signature")
+             
+        # Create the actual order in DB now that payment is VERIFIED
+        # Or update if we created it as 'awaiting_payment' earlier.
+        # Logic: Create new order as 'paid'
         
+        # Extract User ID if passed (frontend might need to pass it, or we rely on creating guest)
+        # Ideally frontend calls this with Auth token, but Razorpay callback might be public.
+        # For now, let's assume we create it based on payload data.
+        
+        items = order_data.get('items', [])
+        if not items and order_data.get('productId'):
+            items = [{
+                "productId": order_data.get('productId'),
+                "productName": "Direct Product",
+                "variantId": order_data.get('variantId'),
+                "quantity": order_data.get('quantity'),
+                "price": order_data.get('amount')
+            }]
+
+        # Try to find user by email to link?
+        user_id = None
+        existing_cust = session.exec(select(Customer).where(Customer.email == order_data.get('email'))).first()
+        if existing_cust and existing_cust.supabase_uid:
+            user_id = existing_cust.supabase_uid # Use UID if we have it
+        elif existing_cust:
+            # User exists but no UID (legacy?), maybe don't link via UUID field if it's strictly UUID type
+            pass
+
+        new_order = Order(
+            order_id=f"ORD-{razorpay_order_id}" if razorpay_order_id else f"ORD-{int(time.time())}",
+            customer_name=order_data.get('name'),
+            email=order_data.get('email'),
+            phone=order_data.get('contact'),
+            address=order_data.get('address'),
+            city=order_data.get('city'),
+            pincode=order_data.get('pincode'),
+            total_amount=order_data.get('amount'),
+            payment_method="online",
+            status="paid",
+            email_status="pending", # Explicitly set default
+            user_id=uuid.UUID(user_id) if user_id else None,
+            items_json=json.dumps(items),
+            status_history=json.dumps([{
+                "status": "paid",
+                "timestamp": datetime.utcnow().isoformat(),
+                "comment": f"Payment Successful. Ref: {razorpay_payment_id}"
+            }])
+        )
+        
+        session.add(new_order)
+        session.commit()
+        session.refresh(new_order)
+        
+        background_tasks.add_task(send_order_notifications, new_order.dict())
+        
+        return {"ok": True, "orderId": new_order.order_id}
+
     except Exception as e:
-        print(f"Signature Verification Failed: {e}")
-        raise HTTPException(status_code=400, detail="Invalid Payment Signature")
-         
-    # Create the actual order in DB now that payment is VERIFIED
-    # Or update if we created it as 'awaiting_payment' earlier.
-    # Logic: Create new order as 'paid'
-    
-    # Extract User ID if passed (frontend might need to pass it, or we rely on creating guest)
-    # Ideally frontend calls this with Auth token, but Razorpay callback might be public.
-    # For now, let's assume we create it based on payload data.
-    
-    items = order_data.get('items', [])
-    if not items and order_data.get('productId'):
-        items = [{
-            "productId": order_data.get('productId'),
-            "productName": "Direct Product",
-            "variantId": order_data.get('variantId'),
-            "quantity": order_data.get('quantity'),
-            "price": order_data.get('amount')
-        }]
-
-    # Try to find user by email to link?
-    user_id = None
-    existing_cust = session.exec(select(Customer).where(Customer.email == order_data.get('email'))).first()
-    if existing_cust and existing_cust.supabase_uid:
-        user_id = existing_cust.supabase_uid # Use UID if we have it
-    elif existing_cust:
-        # User exists but no UID (legacy?), maybe don't link via UUID field if it's strictly UUID type
-        pass
-
-    new_order = Order(
-        order_id=f"ORD-{razorpay_order_id}" if razorpay_order_id else f"ORD-{int(time.time())}",
-        customer_name=order_data.get('name'),
-        email=order_data.get('email'),
-        phone=order_data.get('contact'),
-        address=order_data.get('address'),
-        city=order_data.get('city'),
-        pincode=order_data.get('pincode'),
-        total_amount=order_data.get('amount'),
-        payment_method="online",
-        status="paid",
-        user_id=uuid.UUID(user_id) if user_id else None,
-        items_json=json.dumps(items),
-        status_history=json.dumps([{
-            "status": "paid",
-            "timestamp": datetime.utcnow().isoformat(),
-            "comment": f"Payment Successful. Ref: {razorpay_payment_id}"
-        }])
-    )
-    
-    session.add(new_order)
-    session.commit()
-    session.refresh(new_order)
-    
-    background_tasks.add_task(send_order_notifications, new_order.dict())
-    
-    return {"ok": True, "orderId": new_order.order_id}
+        print(f"CRITICAL API ERROR: {traceback.format_exc()}")
+        raise HTTPException(status_code=400, detail=f"DEBUG ERROR: {str(e)}")
 
 
 @router.post("/api/orders", response_model=Order)
