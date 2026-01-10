@@ -80,6 +80,7 @@ class Customer(SQLModel, table=True):
     email: str = Field(index=True, unique=True)
     hashed_password: Optional[str] = None # Nullable for social login
     provider: str = "email" # email, google, facebook
+    telegram_id: Optional[str] = None # For Telegram Login
     supabase_uid: Optional[str] = Field(default=None, index=True, unique=True) # Link to Supabase Auth UUID
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
