@@ -21,7 +21,8 @@ def send_order_notifications(order_data):
     
     # --- 1. Email Notification ---
     try:
-        sender_email = os.getenv("EMAIL_SENDER")
+        # Support user's preferred env var 'EMAIL_USER' matching the guide, fallback to 'EMAIL_SENDER'
+        sender_email = os.getenv("EMAIL_USER") or os.getenv("EMAIL_SENDER")
         sender_password = os.getenv("EMAIL_PASSWORD") 
         # Support for alias: authenticate with sender_email, but send as sender_alias if set
         sender_alias = os.getenv("EMAIL_FROM", sender_email)
