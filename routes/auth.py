@@ -78,7 +78,7 @@ def telegram_login(data: TelegramAuth, session: Session = Depends(get_session)):
     Verify Telegram Login Widget Data
     """
     # 1. Verify Hash
-    BOT_TOKEN = "7294867491:AAF9Gk8fD9k8fD9k8fD9k8fD9k8fD9k8fD9" # TODO: Replace with Real Bot Token
+    BOT_TOKEN = "8341796935:AAF6TS6k7cjhuqRAD-LxOFvCEPu1ubbtfX4"
     
     # Construct data check string
     # Data-check-string is a concatenation of all received fields, sorted alphabetically, 
