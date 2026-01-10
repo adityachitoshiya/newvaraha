@@ -434,7 +434,12 @@ def login_page(request: Request):
         <div class="login-container">
             <img src="https://newvaraha-nwbd.vercel.app/varaha-assets/logo.png" alt="Logo" class="logo">
             <h2>Admin Access</h2>
-            <form action="/login" method="post">
+            <script>
+                // Pass URL parameters to form action
+                const urlParams = new URLSearchParams(window.location.search);
+                const next = urlParams.get('next') || '/docs';
+                document.write(`<form action="/login?next=${next}" method="post">`);
+            </script>
                 <input type="text" name="username" placeholder="Username" required>
                 <input type="password" name="password" placeholder="Password" required>
                 <button type="submit">Sign In</button>
@@ -446,14 +451,14 @@ def login_page(request: Request):
     """
 
 @router.post("/login")
-def login(response: Response, username: str = Form(...), password: str = Form(...)):
+def login(response: Response, username: str = Form(...), password: str = Form(...), next: str = "/docs"):
     if secrets.compare_digest(username, "aditya") and secrets.compare_digest(password, "chitoshiya"):
         # Set a cookie
-        response = RedirectResponse(url="/docs", status_code=status.HTTP_303_SEE_OTHER)
+        response = RedirectResponse(url=next, status_code=status.HTTP_303_SEE_OTHER)
         response.set_cookie(key="admin_docs_token", value="varaha_secure_session_token", httponly=True)
         return response
     else:
-        return RedirectResponse(url="/login?error=Invalid Credentials", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url=f"/login?error=Invalid Credentials&next={next}", status_code=status.HTTP_303_SEE_OTHER)
 
 @router.get("/logout")
 def logout():
