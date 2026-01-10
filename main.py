@@ -53,7 +53,7 @@ app.add_middleware(MonitoringMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?", # Allow Localhost & Private Network
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|.*\.varahajewels\.in|varahajewels\.in)(:\d+)?", # Allow Localhost, Private, & Production Domains
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
