@@ -44,7 +44,9 @@ origins = [
     "https://www.varahajewels.in",
     "https://newvaraha.onrender.com", # Wrapper Backend
     "https://newvaraha-nwbd.vercel.app", # Vercel Frontend
+    "https://backend.varahajewels.in", # Backend Custom Domain
 ]
+
 
 app.add_middleware(MonitoringMiddleware)
 
