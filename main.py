@@ -7,8 +7,9 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from database import create_db_and_tables
 
+from middleware import MonitoringMiddleware
 # Import Routers
-from routes import auth, products, orders, cart, gateways, admin, settings, customer, coupons, analytics, web, health
+from routes import auth, products, orders, cart, gateways, admin, settings, customer, coupons, analytics, web, health, dashboard
 
 app = FastAPI(
     title="Varaha Jewels API",
@@ -30,6 +31,8 @@ origins = [
     "https://newvaraha.onrender.com", # Wrapper Backend
     "https://newvaraha-nwbd.vercel.app", # Vercel Frontend
 ]
+
+app.add_middleware(MonitoringMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -59,3 +62,4 @@ app.include_router(settings.router, tags=["Settings"])
 app.include_router(coupons.router, tags=["Coupons"])
 app.include_router(analytics.router, tags=["Analytics"])
 app.include_router(health.router, tags=["Health"])
+app.include_router(dashboard.router, tags=["Dashboard"])
