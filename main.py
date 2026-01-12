@@ -39,24 +39,26 @@ origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "http://localhost:8000",
-    # Production (Add your actual domains here)
+    
+    # Production
     "https://varahajewels.in",
     "https://www.varahajewels.in",
-    "https://newvaraha.onrender.com", # Wrapper Backend
-    "https://newvaraha-nwbd.vercel.app", # Vercel Frontend
-    "https://backend.varahajewels.in", # Backend Custom Domain
+    "https://backend.varahajewels.in",
+    "https://newvaraha.onrender.com",
+    "https://newvaraha-nwbd.vercel.app",
+    "https://varahajewels-versel.vercel.app", # Just in case
 ]
-
 
 app.add_middleware(MonitoringMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|.*\.varahajewels\.in|varahajewels\.in)(:\d+)?", # Allow Localhost, Private, & Production Domains
+    allow_origin_regex=r"https?://.*\.varahajewels\.in", # Simplified regex for subdomains
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 @app.on_event("startup")
