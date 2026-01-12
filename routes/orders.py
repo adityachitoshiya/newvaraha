@@ -440,9 +440,44 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
         "weight": ship_req.weight
     }
     
+    # Resolve Pickup Location if it's a pincode
+    final_pickup_location = ship_req.pickup_location
+    
+    # If generic or pincode provided, try to auto-resolve
+    if not final_pickup_location or (final_pickup_location.isdigit() and len(final_pickup_location) == 6):
+        print(f"DEBUG: resolving pickup location for input '{final_pickup_location}'")
+        try:
+             locations_resp = rapidshyp_client.get_pickup_locations()
+             if locations_resp.get("data"):
+                 locations = locations_resp.get("data")
+                 # 1. Try to match pincode if input is pincode
+                 if final_pickup_location and final_pickup_location.isdigit():
+                     for loc in locations:
+                         if str(loc.get("pin_code")) == str(final_pickup_location):
+                             final_pickup_location = loc.get("pickup_location_nickname")
+                             print(f"Resolved pincode {ship_req.pickup_location} to name: {final_pickup_location}")
+                             break
+                 
+                 # 2. If still numeric or None, use ENV pincode match
+                 if not final_pickup_location or final_pickup_location.isdigit():
+                     env_pincode = os.getenv("PICKUP_PINCODE")
+                     if env_pincode:
+                         for loc in locations:
+                             if str(loc.get("pin_code")) == str(env_pincode):
+                                 final_pickup_location = loc.get("pickup_location_nickname")
+                                 print(f"Resolved ENV pincode {env_pincode} to name: {final_pickup_location}")
+                                 break
+                 
+                 # 3. Last fallback: Use the first available location
+                 if not final_pickup_location or final_pickup_location.isdigit():
+                     final_pickup_location = locations[0].get("pickup_location_nickname")
+                     print(f"Fallback to first available location: {final_pickup_location}")
+        except Exception as e:
+            print(f"Warning: Failed to fetch pickup locations: {e}")
+
     # Call Wrapper API
     try:
-        response = rapidshyp_client.create_forward_order_wrapper(order_data, pickup_location=ship_req.pickup_location)
+        response = rapidshyp_client.create_forward_order_wrapper(order_data, pickup_location=final_pickup_location)
         
         # Check for Pickup Address Error specifically
         if response.get("status") == "FAILED" and "Pickup address not found" in str(response.get("remarks")):
@@ -450,20 +485,15 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
             locations_resp = rapidshyp_client.get_pickup_locations()
             if locations_resp.get("data"):
                 locations = locations_resp.get("data")
+                print(f"Available Locations: {[l.get('pickup_location_nickname') for l in locations]}")
+                
                 valid_location = locations[0].get("pickup_location_nickname") # Default to first
                 
-                # Try to find matching pincode
-                env_pincode = os.getenv("PICKUP_PINCODE")
-                if env_pincode:
-                    for loc in locations:
-                        if str(loc.get("pin_code")) == str(env_pincode):
-                             valid_location = loc.get("pickup_location_nickname")
-                             print(f"Found location matching env pincode {env_pincode}: {valid_location}")
-                             break
-                
-                print(f"Retrying with valid location: {valid_location}")
                 # Retry with new location
+                print(f"Retrying with valid location: {valid_location}")
                 response = rapidshyp_client.create_forward_order_wrapper(order_data, pickup_location=valid_location)
+            else:
+                print("No pickup locations found in RapidShyp account.")
 
     except Exception as e:
         print("CRITICAL: RapidShyp Wrapper Exception")
