@@ -500,7 +500,24 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
                 response = rapidshyp_client.create_forward_order_wrapper(order_data, pickup_location=valid_location)
             else:
                 print("No pickup locations found in RapidShyp account.")
+                
+        # Final check if it still failed
+        if response.get("status") == "FAILED":
+             error_msg = response.get("remarks", "Unknown Error")
+             
+             # If still address error, fetch and show available
+             if "Pickup address" in str(error_msg):
+                 try:
+                     loc_resp = rapidshyp_client.get_pickup_locations()
+                     avail_locs = [l.get('pickup_location_nickname') for l in loc_resp.get('data', [])]
+                     error_msg += f". AVAILABLE LOCATIONS: {', '.join(avail_locs)}"
+                 except: 
+                     pass
+                     
+             raise HTTPException(status_code=400, detail=f"RapidShyp Error: {error_msg}")
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
         print("CRITICAL: RapidShyp Wrapper Exception")
         print(traceback.format_exc())
