@@ -128,7 +128,7 @@ class RapidShypClient:
             payload["pickupLocation"] = pickup_location
         else:
             # Default fallback if no pickup details provided (User must configure this)
-            payload["pickupAddressName"] = "Primary Warehouse" 
+            payload["pickupAddressName"] = "Jaipur" 
 
         return self._make_request("POST", "wrapper", payload=payload)
 

@@ -63,7 +63,7 @@ class ServiceabilityCheck(BaseModel):
     items: Optional[List[ServiceabilityItem]] = [] # For per-item check
 
 class ShipOrderRequest(BaseModel):
-    pickup_location: Optional[str] = None # Defaults to None to trigger auto-detection
+    pickup_location: Optional[str] = "Jaipur" # Default to 'Jaipur' as per user request
     length: float = 10.0
     breadth: float = 10.0
     height: float = 5.0
