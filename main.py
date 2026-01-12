@@ -54,7 +54,7 @@ app.add_middleware(MonitoringMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex=r"https?://.*\.varahajewels\.in", # Simplified regex for subdomains
+    allow_origin_regex=r"https?://(.*\.)?varahajewels\.in", # Allow naked domain and subdomains
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
