@@ -63,7 +63,7 @@ class ServiceabilityCheck(BaseModel):
     items: Optional[List[ServiceabilityItem]] = [] # For per-item check
 
 class ShipOrderRequest(BaseModel):
-    pickup_location: Optional[str] = "Primary Warehouse" # Or specific pickup name
+    pickup_location: Optional[str] = None # Defaults to None to trigger auto-detection
     length: float = 10.0
     breadth: float = 10.0
     height: float = 5.0
@@ -444,10 +444,12 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
     final_pickup_location = ship_req.pickup_location
     
     # If generic or pincode provided, try to auto-resolve
-    if not final_pickup_location or (final_pickup_location.isdigit() and len(final_pickup_location) == 6):
-        print(f"DEBUG: resolving pickup location for input '{final_pickup_location}'")
+    if not final_pickup_location or (isinstance(final_pickup_location, str) and final_pickup_location.isdigit()):
+        print(f"DEBUG: Auto-resolving pickup location. Input: '{final_pickup_location}'")
         try:
              locations_resp = rapidshyp_client.get_pickup_locations()
+             print(f"DEBUG: Locations API Response: {locations_resp}")
+             
              if locations_resp.get("data"):
                  locations = locations_resp.get("data")
                  # 1. Try to match pincode if input is pincode
@@ -461,6 +463,7 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
                  # 2. If still numeric or None, use ENV pincode match
                  if not final_pickup_location or final_pickup_location.isdigit():
                      env_pincode = os.getenv("PICKUP_PINCODE")
+                     print(f"DEBUG: Checking ENV pincode: {env_pincode}")
                      if env_pincode:
                          for loc in locations:
                              if str(loc.get("pin_code")) == str(env_pincode):
@@ -469,11 +472,14 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
                                  break
                  
                  # 3. Last fallback: Use the first available location
-                 if not final_pickup_location or final_pickup_location.isdigit():
+                 if not final_pickup_location or (isinstance(final_pickup_location, str) and final_pickup_location.isdigit()):
                      final_pickup_location = locations[0].get("pickup_location_nickname")
                      print(f"Fallback to first available location: {final_pickup_location}")
+             else:
+                 print("DEBUG: No locations found in 'data' field of response.")
         except Exception as e:
             print(f"Warning: Failed to fetch pickup locations: {e}")
+            print(traceback.format_exc())
 
     # Call Wrapper API
     try:
