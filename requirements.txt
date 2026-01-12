@@ -14,4 +14,7 @@ psycopg2-binary
 supabase
 Pillow
 gunicorn
+gunicorn
 psutil
+moviepy
+cloudinary

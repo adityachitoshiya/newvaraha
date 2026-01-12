@@ -12,14 +12,23 @@ from supabase_utils import upload_file_to_supabase
 
 router = APIRouter()
 
+from cloudinary_utils import upload_video_to_cloudinary
+
 @router.post("/api/upload")
 async def upload_file(
     file: UploadFile = File(...), 
     current_user: AdminUser = Depends(get_current_admin)
 ):
-    url = upload_file_to_supabase(file)
+    # Route based on content type
+    if file.content_type and "video" in file.content_type:
+        file_content = await file.read()
+        url = upload_video_to_cloudinary(file_content)
+    else:
+        url = upload_file_to_supabase(file)
+
     if not url:
-        raise HTTPException(status_code=500, detail="Image upload failed")
+        raise HTTPException(status_code=500, detail="Upload failed")
+    
     return {"url": url}
 
 # --- Hero Slides ---
@@ -93,7 +102,7 @@ def get_creator_videos(session: Session = Depends(get_session)):
     return videos
 
 @router.post("/api/content/creators")
-def create_creator_video(
+async def create_creator_video(
     name: str = Form(...),
     handle: str = Form(...),
     platform: str = Form(...),
@@ -104,11 +113,13 @@ def create_creator_video(
     current_user: AdminUser = Depends(get_current_admin)
 ):
     try:
-        # Upload video to Supabase
+        # Upload video to Cloudinary
         print(f"Received upload request for {name}")
-        video_url = upload_file_to_supabase(video_file)
+        file_content = await video_file.read()
+        video_url = upload_video_to_cloudinary(file_content)
+        
         if not video_url:
-            raise Exception("upload_file_to_supabase returned None")
+            raise Exception("Cloudinary upload failed")
 
         # Create CreatorVideo object
         video = CreatorVideo(

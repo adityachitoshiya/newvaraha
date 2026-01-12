@@ -145,6 +145,8 @@ class StoreSettings(SQLModel, table=True):
     is_maintenance_mode: bool = False
     spotlight_source: str = "featured"  # 'featured' or 'new_arrivals'
     rapidshyp_enabled: str = "false"  # Enable/disable RapidShyp API calls
+    heritage_video_desktop: Optional[str] = None
+    heritage_video_mobile: Optional[str] = None
 
 
 

@@ -44,6 +44,8 @@ def update_store_settings(new_settings: StoreSettings, session: Session = Depend
     settings.is_maintenance_mode = new_settings.is_maintenance_mode
     settings.spotlight_source = new_settings.spotlight_source
     settings.rapidshyp_enabled = new_settings.rapidshyp_enabled
+    settings.heritage_video_desktop = new_settings.heritage_video_desktop
+    settings.heritage_video_mobile = new_settings.heritage_video_mobile
 
     session.add(settings)
     session.commit()

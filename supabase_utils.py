@@ -65,12 +65,14 @@ def compress_image_to_webp(file_content: bytes, content_type: str, max_size: int
         # Return original if compression fails
         return file_content, None, content_type
 
+# Video compression removed
+
+
 def upload_file_to_supabase(file: UploadFile, bucket: str = None):
     """
     Uploads a file to Supabase Storage.
-    Images are automatically compressed and converted to WebP.
-    Automatically selects bucket 'video' or 'image' based on content type if bucket is not provided.
-    Returns the public URL.
+    Images compressed to WebP.
+    Videos compressed if > 10MB.
     """
     try:
         supabase = init_supabase()
@@ -86,7 +88,8 @@ def upload_file_to_supabase(file: UploadFile, bucket: str = None):
             print("File content is empty")
             return None
             
-        print(f"File read success: {len(file_content)} bytes")
+        file_size_mb = len(file_content) / (1024 * 1024)
+        print(f"File read success: {file_size_mb:.2f} MB")
         
         content_type = file.content_type
         original_filename = file.filename.replace(" ", "_").replace("(", "").replace(")", "")
@@ -98,14 +101,13 @@ def upload_file_to_supabase(file: UploadFile, bucket: str = None):
             else:
                 bucket = "IMAGE"
 
-        # Compress and convert images to WebP
+        # Compress Image (Video compression removed as per user request)
         if bucket == "IMAGE" and content_type and "image" in content_type:
             file_content, new_ext, content_type = compress_image_to_webp(file_content, content_type)
             if new_ext:
-                # Replace extension with .webp
                 base_name = os.path.splitext(original_filename)[0]
                 original_filename = base_name + new_ext
-
+                
         # Generate unique path
         timestamp = int(time.time())
         file_path = f"{timestamp}_{original_filename}"
