@@ -63,7 +63,7 @@ class ServiceabilityCheck(BaseModel):
     items: Optional[List[ServiceabilityItem]] = [] # For per-item check
 
 class ShipOrderRequest(BaseModel):
-    pickup_location: Optional[str] = "Jaipur" # Default to 'Jaipur' as per user request
+    pickup_location: Optional[str] = None # Revert to None to force auto-resolution via API
     length: float = 10.0
     breadth: float = 10.0
     height: float = 5.0
@@ -448,10 +448,14 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
         print(f"DEBUG: Auto-resolving pickup location. Input: '{final_pickup_location}'")
         try:
              locations_resp = rapidshyp_client.get_pickup_locations()
-             print(f"DEBUG: Locations API Response: {locations_resp}")
+             # print(f"DEBUG: Locations API Response: {locations_resp}") # Too verbose?
              
              if locations_resp.get("data"):
                  locations = locations_resp.get("data")
+                 print(f"DEBUG: Found {len(locations)} locations from API.")
+                 for l in locations:
+                     print(f"DEBUG: Location candidate: Name='{l.get('pickup_location_nickname')}', Pin='{l.get('pin_code')}'")
+
                  # 1. Try to match pincode if input is pincode
                  if final_pickup_location and final_pickup_location.isdigit():
                      for loc in locations:
