@@ -22,6 +22,8 @@ def send_order_notifications(order_data):
     Args:
         order_data (dict): Contains 'order_id' and 'total_amount' (and optionally 'items' or 'items_json').
     """
+    logging.error("BACKGROUND TASK TRIGGERED")
+    logger.info(f"Preparing to send notifications for Order: {order_data.get('order_id')}")
     
     # --- 1. Email Notification ---
     try:
