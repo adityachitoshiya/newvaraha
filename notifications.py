@@ -265,52 +265,62 @@ def send_order_notifications(order_data):
                 msg_customer['Subject'] = subject_customer
                 msg_customer.attach(MIMEText(body_customer, 'html'))
             
-            # Connect to SMTP (Handle SSL/TLS)
-            logger.info(f"Connecting to SMTP: {smtp_host}:{smtp_port}...")
+            # Retry logic for robust email sending
+            max_retries = 3
+            retry_delay = 2 # seconds
             
-            try:
-                if smtp_port == 465:
-                    # SSL Connection
-                    with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:
-                        # server.set_debuglevel(1) # Uncomment for deep debug
-                        logger.info("SMTP SSL Connected. Logging in...")
-                        server.login(sender_email, sender_password)
-                        logger.info("SMTP Login Success. Sending email...")
-                        server.send_message(msg_admin)
-                        if customer_email:
-                            server.send_message(msg_customer)
-                else:
-                    # TLS Connection (587)
-                    with smtplib.SMTP(smtp_host, smtp_port) as server:
-                        logger.info("SMTP Connected. Starting TLS...")
-                        server.starttls()
-                        logger.info("SMTP TLS Started. Logging in...")
-                        server.login(sender_email, sender_password)
-                        logger.info("SMTP Login Success. Sending email...")
-                        server.send_message(msg_admin)
-                        if customer_email:
-                            server.send_message(msg_customer)
-                            
-                logger.info(f"Email notifications sent to Admin ({admin_email}) and Customer ({customer_email})")
-                
-                # UPDATE DB STATUS: SUCCESS
-                if customer_email:
-                    with Session(engine) as session:
-                        statement = select(Order).where(Order.order_id == order_data.get('order_id'))
-                        order_record = session.exec(statement).first()
-                        if order_record:
-                            order_record.email_status = "sent"
-                            session.add(order_record)
-                            session.commit()
-                            logger.info(f"Updated Order {order_record.order_id} email_status to 'sent'")
-                
-            except smtplib.SMTPAuthenticationError as auth_err:
-                 logger.error(f"❌ SMTP Auth Error: {auth_err.smtp_code} - {auth_err.smtp_error}")
-                 logger.error("Double check your EMAIL_FROM and EMAIL_PASSWORD in .env")
-                 raise auth_err
-            except Exception as e:
-                 logger.error(f"❌ SMTP Connection Error: {str(e)}")
-                 raise e
+            import time
+            
+            for attempt in range(1, max_retries + 1):
+                try:
+                    logger.info(f"Connecting to SMTP: {smtp_host}:{smtp_port} (Attempt {attempt}/{max_retries})...")
+                    
+                    if smtp_port == 465:
+                        # SSL Connection with timeout
+                        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30) as server:
+                            logger.info("SMTP SSL Connected. Logging in...")
+                            server.login(sender_email, sender_password)
+                            logger.info("SMTP Login Success. Sending email...")
+                            server.send_message(msg_admin)
+                            if customer_email:
+                                server.send_message(msg_customer)
+                    else:
+                        # TLS Connection (587) with timeout
+                        with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+                            logger.info("SMTP Connected. Starting TLS...")
+                            server.starttls()
+                            logger.info("SMTP TLS Started. Logging in...")
+                            server.login(sender_email, sender_password)
+                            server.send_message(msg_admin)
+                            if customer_email:
+                                server.send_message(msg_customer)
+                                
+                    logger.info(f"Email notifications sent to Admin ({admin_email}) and Customer ({customer_email})")
+                    
+                    # UPDATE DB STATUS: SUCCESS
+                    if customer_email:
+                        with Session(engine) as session:
+                            statement = select(Order).where(Order.order_id == order_data.get('order_id'))
+                            order_record = session.exec(statement).first()
+                            if order_record:
+                                order_record.email_status = "sent"
+                                session.add(order_record)
+                                session.commit()
+                                logger.info(f"Updated Order {order_record.order_id} email_status to 'sent'")
+                    
+                    # Break loop if successful
+                    break
+                    
+                except smtplib.SMTPAuthenticationError as auth_err:
+                     logger.error(f"❌ SMTP Auth Error: {auth_err.smtp_code} - {auth_err.smtp_error}")
+                     logger.error("Double check your EMAIL_FROM and EMAIL_PASSWORD in .env")
+                     raise auth_err # Don't retry on auth error
+                     
+                except Exception as e:
+                     logger.error(f"❌ SMTP Connection Error (Attempt {attempt}): {str(e)}")
+                     if attempt == max_retries:
+                         raise e
+                     time.sleep(retry_delay)
         else:
             logger.warning("Email credentials not set. Skipping email notification.")
             

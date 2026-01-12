@@ -6,6 +6,7 @@ from database import get_session
 from monitoring import monitor
 from routes.web import check_admin_cookie
 import time
+import html
 
 router = APIRouter()
 
@@ -46,7 +47,7 @@ async def dashboard_ui(request: Request, session: Session = Depends(get_session)
             <div style="font-family: 'Courier New', monospace; font-size: 13px; margin-bottom: 4px; border-bottom: 1px solid #333; padding-bottom: 2px;">
                 <span style="color: #666;">[{log['timestamp']}]</span>
                 <span style="color: {source_color}; font-weight: bold;">[{log['source']}]</span>
-                <span style="color: {color};">{log['message']}</span>
+                <span style="color: {color};">{html.escape(str(log['message']))}</span>
             </div>
         """
 
@@ -244,8 +245,8 @@ async def dashboard_ui(request: Request, session: Session = Depends(get_session)
                             <tr>
                                 <td>{log['timestamp']}</td>
                                 <td><span class="method-tag" style="color:#ffcccc;">{log['method']}</span></td>
-                                <td style="font-family:monospace;">{log['path']}</td>
-                                <td style="color:#e74c3c;">{log['error_type']}</td>
+                                <td style="font-family:monospace;">{html.escape(str(log['path']))}</td>
+                                <td style="color:#e74c3c;">{html.escape(str(log['error_type']))}</td>
                             </tr>
                         ''' for log in monitor.recent_crashes])}
                         
@@ -268,7 +269,7 @@ async def dashboard_ui(request: Request, session: Session = Depends(get_session)
                          {"".join([f'''
                             <tr>
                                 <td>{log['timestamp']}</td>
-                                <td style="font-family:monospace;">{log['path']}</td>
+                                <td style="font-family:monospace;">{html.escape(str(log['path']))}</td>
                                 <td style="color:#f1c40f;">{log['time_taken']}</td>
                             </tr>
                         ''' for log in monitor.slow_routes])}

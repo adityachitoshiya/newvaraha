@@ -50,13 +50,21 @@ if "sqlite" in database_url:
     engine = create_engine(database_url, echo=True, connect_args=connect_args)
 else:
     print("✅ Using Remote Database (Supabase/PostgreSQL)")
+    
+    # TCP Keepalive to prevent connection drops by intermediate firewalls/proxies
+    connect_args["keepalives"] = 1
+    connect_args["keepalives_idle"] = 30
+    connect_args["keepalives_interval"] = 10
+    connect_args["keepalives_count"] = 5
+
     # Optimize connection pool for remote DB to prevent timeouts
     engine = create_engine(
         database_url, 
         echo=True, 
         connect_args=connect_args,
         pool_pre_ping=True, 
-        pool_recycle=1800,
+        pool_recycle=280, # Recycle before Supabase's 5-minute idle timeout
+        pool_timeout=30,  # Prevent indefinite blocking
         pool_size=10, 
         max_overflow=20
     )

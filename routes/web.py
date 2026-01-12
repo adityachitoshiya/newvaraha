@@ -438,13 +438,13 @@ def login_page(request: Request):
                 // Pass URL parameters to form action
                 const urlParams = new URLSearchParams(window.location.search);
                 const next = urlParams.get('next') || '/docs';
-                document.write(`<form action="/login?next=${next}" method="post">`);
+                document.write(`<form action="/login?next=${{next}}" method="post">`);
             </script>
                 <input type="text" name="username" placeholder="Username" required>
                 <input type="password" name="password" placeholder="Password" required>
                 <button type="submit">Sign In</button>
             </form>
-            {{error_msg}}
+            {error_msg}
         </div>
     </body>
     </html>
