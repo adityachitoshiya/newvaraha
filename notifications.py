@@ -42,7 +42,7 @@ def send_order_notifications(order_data):
             admin_email = sender_email
             
         smtp_host = os.getenv("SMTP_HOST", "smtp.hostinger.com")
-        smtp_port = int(os.getenv("SMTP_PORT", "465"))
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
 
         if sender_email and sender_password:
             # --- Send to Admin ---
