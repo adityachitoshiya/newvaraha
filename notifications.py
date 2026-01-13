@@ -86,21 +86,25 @@ def send_order_notifications(order_data):
                     logger.error("Failed to parse items_json")
                     items = []
             if items:
+                items_html += '<table style="width: 100%; border-collapse: collapse;">'
                 for item in items:
                     name = item.get('name', 'Product')
                     price = item.get('price', 0)
                     items_html += f"""
-                        <div class="item-row clearfix">
-                            <span class="item-name">{name}</span>
-                            <span class="item-price">₹{price}</span>
-                        </div>
+                        <tr>
+                            <td style="padding: 10px 0; border-bottom: 1px dashed #e0d8c3; color: #1a1a1a; font-family: 'Georgia', serif; font-size: 16px;">{name}</td>
+                            <td style="padding: 10px 0; border-bottom: 1px dashed #e0d8c3; text-align: right; color: #444; font-family: 'Helvetica', sans-serif; font-size: 15px;">₹{price}</td>
+                        </tr>
                     """
+                items_html += '</table>'
             else:
                 items_html = f"""
-                    <div class="item-row clearfix">
-                         <span class="item-name">Order Items</span>
-                         <span class="item-price">₹{order_data.get('total_amount', 0)}</span>
-                    </div>
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                             <td style="padding: 10px 0; color: #1a1a1a; font-family: 'Georgia', serif; font-size: 16px;">Order Items</td>
+                             <td style="padding: 10px 0; text-align: right; color: #444; font-family: 'Helvetica', sans-serif; font-size: 15px;">₹{order_data.get('total_amount', 0)}</td>
+                        </tr>
+                    </table>
                 """
 
             body_customer = f"""
@@ -208,18 +212,20 @@ def send_order_notifications(order_data):
 
                                                         <!-- Totals -->
                                                         <div class="total-section">
-                                                            <div class="total-row clearfix">
-                                                                <span class="total-label">Subtotal</span>
-                                                                <span class="total-value">₹{order_data.get('total_amount', 0)}</span>
-                                                            </div>
-                                                            <div class="total-row clearfix">
-                                                                <span class="total-label">Insured Shipping</span>
-                                                                <span class="total-value">Complimentary</span>
-                                                            </div>
-                                                            <div class="total-row clearfix grand-total">
-                                                                <span class="total-label">Grand Total</span>
-                                                                <span class="total-value">₹{order_data.get('total_amount', 0)}</span>
-                                                            </div>
+                                                            <table style="width: 100%; border-collapse: collapse;">
+                                                                <tr>
+                                                                    <td class="total-label" style="padding-bottom: 8px;">Subtotal</td>
+                                                                    <td class="total-value" style="text-align: right; padding-bottom: 8px;">₹{order_data.get('total_amount', 0)}</td>
+                                                                </tr>
+                                                                <tr>
+                                                                    <td class="total-label" style="padding-bottom: 8px;">Insured Shipping</td>
+                                                                    <td class="total-value" style="text-align: right; padding-bottom: 8px;">Complimentary</td>
+                                                                </tr>
+                                                                <tr>
+                                                                    <td class="total-label" style="padding-top: 15px; border-top: 1px solid #c5a059; color: #1a1a1a; font-weight: bold; font-family: 'Georgia', serif; font-size: 16px;">Grand Total</td>
+                                                                    <td class="total-value" style="text-align: right; padding-top: 15px; border-top: 1px solid #c5a059; color: #c5a059; font-weight: bold; font-size: 18px;">₹{order_data.get('total_amount', 0)}</td>
+                                                                </tr>
+                                                            </table>
                                                         </div>
                                                     </div>
 
@@ -474,3 +480,82 @@ def send_order_notifications(order_data):
             
     except Exception as e:
         logger.error(f"Failed to send Telegram notification: {str(e)}")
+
+
+def send_shipping_notifications(order_data):
+    """
+    Triggers email notification when an order is shipped.
+    """
+    try:
+        # Load Config
+        sender_email = os.getenv("EMAIL_USER") or os.getenv("EMAIL_SENDER")
+        sender_alias = os.getenv("EMAIL_FROM", sender_email)
+        email_provider = os.getenv("EMAIL_PROVIDER", "smtp").lower()
+        resend_api_key = os.getenv("RESEND_API_KEY")
+        
+        customer_email = order_data.get('email')
+        if not customer_email:
+            logger.warning("No customer email found for shipping notification")
+            return
+
+        subject = f"Your Order has been Shipped! - {order_data.get('order_id')} | Varaha Jewels"
+        
+        tracking_url = f"{os.getenv('FRONTEND_URL', 'https://varahajewels.com')}/orders/{order_data.get('order_id')}"
+        
+        body_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: 'Helvetica', sans-serif; background-color: #f4f1ea; margin: 0; padding: 0; }}
+                .container {{ max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e0d8c3; }}
+                .header {{ text-align: center; padding: 40px; border-bottom: 1px solid #f0e6d2; }}
+                .content {{ padding: 40px; text-align: center; }}
+                .btn {{ background-color: #1a1a1a; color: #c5a059; padding: 15px 30px; text-decoration: none; display: inline-block; margin-top: 20px; text-transform: uppercase; letter-spacing: 2px; }}
+                .details {{ background-color: #faf9f6; padding: 20px; margin: 20px 0; text-align: left; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <img src="https://res.cloudinary.com/dd5zrsmok/image/upload/v1766342264/logo_hvef6t.png" width="150" alt="Varaha Jewels">
+                </div>
+                <div class="content">
+                    <h2 style="font-family: 'Georgia', serif; color: #1a1a1a;">Your Order is on the way!</h2>
+                    <p style="color: #666; line-height: 1.6;">
+                        Great news, <strong>{order_data.get('customer_name')}</strong>! Your order items have been dispatched and are making their way to you.
+                    </p>
+                    
+                    <div class="details">
+                        <p><strong>Courier:</strong> {order_data.get('courier_name')}</p>
+                        <p><strong>Tracking Number (AWB):</strong> {order_data.get('awb_number')}</p>
+                    </div>
+
+                    <a href="{tracking_url}" class="btn">Track Your Order</a>
+                    
+                    <p style="color: #999; font-size: 12px; margin-top: 40px;">
+                        You can also track your shipment directly on the courier's website using the AWB number provided.
+                    </p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+        # Resend Logic
+        if email_provider == 'resend' and resend_api_key:
+            import resend
+            resend.api_key = resend_api_key
+            r = resend.Emails.send({
+                "from": f"Varaha Jewels <{sender_alias}>" if '@' in sender_alias else "onboarding@resend.dev",
+                "to": customer_email,
+                "subject": subject,
+                "html": body_html
+            })
+            logger.info(f"Shipping email sent via Resend. ID: {r.get('id')}")
+            
+        else:
+            logger.warning("Shipping email skipped: Provider not Resend or keys missing.")
+
+    except Exception as e:
+        logger.error(f"Failed to send shipping notification: {str(e)}")

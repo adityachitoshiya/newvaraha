@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from database import get_session
 from models import Order, Customer, AdminUser, SystemSetting, PaymentGateway, StoreSettings
 from dependencies import get_current_user, oauth2_scheme, get_current_admin
-from notifications import send_order_notifications
+from notifications import send_order_notifications, send_shipping_notifications
 from rapidshyp_utils import rapidshyp_client
 import razorpay
 import traceback
@@ -560,8 +560,8 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
             session.commit()
             session.refresh(order)
             
-            # Trigger notification (Example)
-            # send_order_notifications(order) 
+            # Trigger notification
+            background_tasks.add_task(send_shipping_notifications, order.dict()) 
             
             return {"ok": True, "shipment": sh}
     
