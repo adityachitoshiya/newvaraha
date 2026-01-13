@@ -225,7 +225,7 @@ def send_order_notifications(order_data):
 
                                                     <!-- CTA Button -->
                                                     <div class="btn-container">
-                                                        <a href="http://192.168.1.5:3000/orders/{order_data.get('order_id')}" class="btn">View Order Details</a>
+                                                        <a href="{os.getenv('FRONTEND_URL', 'https://varahajewels.com')}/orders/{order_data.get('order_id')}" class="btn">View Order Details</a>
                                                     </div>
                                                     
                                                     <p style="text-align: center; font-size: 14px; color: #777; margin-top: 30px; font-family: 'Helvetica', sans-serif;">
