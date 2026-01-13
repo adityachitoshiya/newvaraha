@@ -89,8 +89,9 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
             user_data_sb = s_client.auth.get_user(token)
             if user_data_sb and user_data_sb.user:
                 user_id = user_data_sb.user.id  # This is the UUID
-                user_email = user_data_sb.user.email
-                print(f"DEBUG: Creating order for User UUID: {user_id}, Email: {user_email}")
+                # user_email = user_data_sb.user.email
+                # print(f"DEBUG: Creating order for User UUID: {user_id}") 
+                pass
     except Exception as e:
         # print(f"DEBUG: Supabase Token Check Failed: {e}")
         # Allow order creation without user_id for guest checkout
@@ -125,6 +126,11 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
             "price": order_data.amount / order_data.quantity if order_data.quantity else 0
         }]
 
+    # Calculate Total Amount including COD charges
+    final_amount = order_data.amount
+    if order_data.codCharges:
+        final_amount += order_data.codCharges
+
     new_order = Order(
         order_id=order_id_str,
         customer_name=order_data.name,
@@ -133,7 +139,7 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
         address=order_data.address,
         city=order_data.city,
         pincode=order_data.pincode,
-        total_amount=order_data.amount,
+        total_amount=final_amount,
         payment_method="cod",
         status="pending",
         user_id=uuid.UUID(user_id) if user_id else None,

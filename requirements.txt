@@ -14,7 +14,7 @@ psycopg2-binary
 supabase
 Pillow
 gunicorn
-gunicorn
 psutil
 moviepy
-cloudinary
+boto3
+resend
