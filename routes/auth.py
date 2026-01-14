@@ -78,7 +78,9 @@ def telegram_login(data: TelegramAuth, session: Session = Depends(get_session)):
     Verify Telegram Login Widget Data
     """
     # 1. Verify Hash
-    BOT_TOKEN = "8341796935:AAF6TS6k7cjhuqRAD-LxOFvCEPu1ubbtfX4"
+    BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not BOT_TOKEN:
+        raise HTTPException(status_code=500, detail="Server misconfiguration: Telegram Token Missing")
     
     # Construct data check string
     # Data-check-string is a concatenation of all received fields, sorted alphabetically, 
@@ -155,15 +157,15 @@ def verify_admin_otp(data: VerifyOTP):
 
 @router.post("/api/login", response_model=LoginResponse)
 def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
-    print(f"DEBUG: Login Attempt for: {form_data.username}")
+    # print(f"DEBUG: Login Attempt for: {form_data.username}") # REMOVED LOG
     user = session.exec(select(AdminUser).where(AdminUser.username == form_data.username)).first()
     
     if not user:
-        print("DEBUG: AdminUser NOT FOUND in DB.")
+        # print("DEBUG: AdminUser NOT FOUND in DB.") # REMOVED LOG
         raise HTTPException(status_code=401, detail="User not found")
         
     valid_pwd = verify_password(form_data.password, user.hashed_password)
-    print(f"DEBUG: Password Valid? {valid_pwd}")
+    # print(f"DEBUG: Password Valid? {valid_pwd}") # REMOVED LOG
     
     if not valid_pwd:
         raise HTTPException(status_code=401, detail="Invalid password")
@@ -199,8 +201,8 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), ses
     # If Telegram not configured (Dev mode fallback) OR failed
     if not bot_token:
          # In dev, maybe simulate 2FA by printing to console?
-         print(f"DEBUG OTP for {user.username}: {otp}")
-         return {"status": "2fa_required", "username": user.username, "message": "OTP (Simulated) Sent"}
+         print(f"DEBUG: Telegram not configured for 2FA. OTP generation skipped in secure mode.")
+         return {"status": "error", "username": user.username, "message": "2FA Service Unavailable"}
          
     # If failed to send
     raise HTTPException(status_code=500, detail="Failed to send 2FA OTP")

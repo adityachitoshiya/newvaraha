@@ -452,7 +452,11 @@ def login_page(request: Request):
 
 @router.post("/login")
 def login(response: Response, username: str = Form(...), password: str = Form(...), next: str = "/docs"):
-    if secrets.compare_digest(username, "aditya") and secrets.compare_digest(password, "chitoshiya"):
+    import os
+    admin_user = os.getenv("ADMIN_DOCS_USER", "admin")
+    admin_pass = os.getenv("ADMIN_DOCS_PASS", "change_me_immediately")
+
+    if secrets.compare_digest(username, admin_user) and secrets.compare_digest(password, admin_pass):
         # Set a cookie
         response = RedirectResponse(url=next, status_code=status.HTTP_303_SEE_OTHER)
         response.set_cookie(key="admin_docs_token", value="varaha_secure_session_token", httponly=True)

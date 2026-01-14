@@ -45,9 +45,22 @@ def create_gateway(gateway_in: GatewayCreate, token: str = Depends(oauth2_scheme
     session.refresh(gateway)
     return gateway
 
-@router.get("/api/gateways", response_model=List[PaymentGateway])
+@router.get("/api/gateways")
 def read_gateways(token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
-    return session.exec(select(PaymentGateway)).all()
+    gateways = session.exec(select(PaymentGateway)).all()
+    results = []
+    for g in gateways:
+        g_dict = g.model_dump()
+        try:
+            creds = json.loads(g.credentials_json)
+            # Mask sensitive fields
+            if 'key_secret' in creds:
+                creds['key_secret'] = '********'
+            g_dict['credentials_json'] = json.dumps(creds)
+        except:
+            pass
+        results.append(g_dict)
+    return results
 
 @router.put("/api/gateways/{gateway_id}", response_model=PaymentGateway)
 def update_gateway(gateway_id: int, gateway_in: GatewayUpdate, token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
