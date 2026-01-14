@@ -1,5 +1,5 @@
 from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi import Request
+from fastapi import Request, Response
 import time
 from monitoring import monitor
 import traceback
@@ -8,6 +8,12 @@ class MonitoringMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
         
+        # Security: Block direct browser navigation to /api endpoints
+        # Frontend fetch requests usually send Sec-Fetch-Mode: cors
+        # Direct browser navigation sends Sec-Fetch-Mode: navigate
+        if request.url.path.startswith("/api/") and request.headers.get("sec-fetch-mode") == "navigate":
+             return Response(content="Direct access to API is restricted.", status_code=403)
+
         try:
             response = await call_next(request)
             
