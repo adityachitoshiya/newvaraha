@@ -74,6 +74,35 @@ class ReturnRequest(BaseModel):
     pickup_address: dict # {name, phone, address, pincode...}
     reason_code: str = "OTHER"
 
+# --- Helper ---
+def get_order_by_id_flexible(session: Session, order_id_input: str) -> Optional[Order]:
+    """
+    Try to find an order by ID, handling potential missing prefixes.
+    1. Exact match
+    2. With 'ORD-' prefix
+    3. As Integer (Legacy)
+    """
+    # 1. Exact Match
+    order = session.exec(select(Order).where(Order.order_id == order_id_input)).first()
+    if order: return order
+    
+    # 2. Try adding prefix if not present
+    if not order_id_input.startswith("ORD-"):
+        prefixed_id = f"ORD-{order_id_input}"
+        order = session.exec(select(Order).where(Order.order_id == prefixed_id)).first()
+        if order: return order
+        
+    # 3. Try integer ID (Legacy)
+    if order_id_input.isdigit():
+        try:
+            o_id = int(order_id_input)
+            order = session.get(Order, o_id)
+            if order: return order
+        except:
+            pass
+            
+    return None
+
 # --- Routes ---
 
 @router.post("/api/create-cod-order")
@@ -367,16 +396,8 @@ def read_my_orders(token: str = Depends(oauth2_scheme), session: Session = Depen
 
 @router.get("/api/orders/{order_id}", response_model=Order)
 def read_order(order_id: str, session: Session = Depends(get_session)):
-    # Try integer ID first (legacy) then string ID
-    try:
-        o_id = int(order_id)
-        order = session.get(Order, o_id)
-        if order: return order
-    except:
-        pass
-        
-    # Search by order_id string
-    order = session.exec(select(Order).where(Order.order_id == order_id)).first()
+    order = get_order_by_id_flexible(session, order_id)
+    
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
@@ -385,9 +406,9 @@ def read_order(order_id: str, session: Session = Depends(get_session)):
 # --- RapidShyp Integration Routes ---
 
 @router.post("/api/admin/orders/{order_id}/ship")
-def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
+def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUser = Depends(get_session), session: Session = Depends(get_session)):
     # Find order
-    order = session.exec(select(Order).where(Order.order_id == order_id)).first()
+    order = get_order_by_id_flexible(session, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
         
@@ -570,7 +591,7 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
 
 @router.get("/api/orders/{order_id}/track")
 def track_order_endpoint(order_id: str, session: Session = Depends(get_session)):
-    order = session.exec(select(Order).where(Order.order_id == order_id)).first()
+    order = get_order_by_id_flexible(session, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     

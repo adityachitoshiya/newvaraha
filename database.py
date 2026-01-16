@@ -7,18 +7,11 @@ from pathlib import Path
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
-# Default to SQLite for local development
-sqlite_file_name = "database.db" # Database is now in the same folder as backend app
-if os.getcwd().endswith('backend'):
-    sqlite_file_name = "database.db"
-else:
-    # If running from root, it's inside backend/
-    sqlite_file_name = "backend/database.db"
-
-sqlite_url = f"sqlite:///{sqlite_file_name}"
-
 # Check for DATABASE_URL environment variable (used by AWS/Render/Heroku)
-database_url = os.getenv("DATABASE_URL", sqlite_url)
+database_url = os.getenv("DATABASE_URL")
+
+if not database_url:
+    raise ValueError("CRITICAL: DATABASE_URL is not set. Local storage is disabled. Please configure Supabase.")
 
 # PostgreSQL requires the URL to start with postgresql:// instead of postgres://
 if database_url.startswith("postgres://"):
