@@ -241,7 +241,7 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
 
 
 @router.post("/api/update-order-status")
-def update_order_status_callback(payload: Dict[str, Any], background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
+def update_order_status_callback(payload: Dict[str, Any], background_tasks: BackgroundTasks, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
     try:
         # Verify Razorpay Signature for Security
         # 1. Get Payment Data
@@ -296,14 +296,31 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
                 "price": order_data.get('amount')
             }]
 
-        # Try to find user by email to link?
+        # --- LOGIC UPDATE: Prioritize Logged-in User ---
         user_id = None
-        existing_cust = session.exec(select(Customer).where(Customer.email == order_data.get('email'))).first()
-        if existing_cust and existing_cust.supabase_uid:
-            user_id = existing_cust.supabase_uid # Use UID if we have it
-        elif existing_cust:
-            # User exists but no UID (legacy?), maybe don't link via UUID field if it's strictly UUID type
-            pass
+        
+        # 1. Try to get User ID from Token (If request came from Frontend with Auth)
+        try:
+            if token:
+                from supabase_utils import init_supabase
+                s_client = init_supabase()
+                if s_client:
+                    user_data_sb = s_client.auth.get_user(token)
+                    if user_data_sb and user_data_sb.user:
+                        user_id = user_data_sb.user.id
+                        print(f"DEBUG: Order linked to Logged-in User UUID: {user_id}")
+        except Exception as e:
+            print(f"DEBUG: Token check failed in callback: {e}")
+
+        # 2. Fallback: Try to find user by email to link?
+        if not user_id:
+            existing_cust = session.exec(select(Customer).where(Customer.email == order_data.get('email'))).first()
+            if existing_cust and existing_cust.supabase_uid:
+                user_id = existing_cust.supabase_uid # Use UID if we have it
+                print(f"DEBUG: Order linked by Email Match to UUID: {user_id}")
+            elif existing_cust:
+                # User exists but no UID (legacy?), maybe don't link via UUID field if it's strictly UUID type
+                pass
 
         new_order = Order(
             order_id=f"ORD-{razorpay_order_id}" if razorpay_order_id else f"ORD-{int(time.time())}",
