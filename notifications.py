@@ -559,3 +559,140 @@ def send_shipping_notifications(order_data):
 
     except Exception as e:
         logger.error(f"Failed to send shipping notification: {str(e)}")
+
+
+def send_tracking_notification(order, status: str):
+    """
+    Send email notifications based on tracking status updates.
+    Called from webhook when status changes.
+    
+    Triggers:
+    - shipped: "Your Varaha piece has been shipped!"
+    - out_for_delivery: "Your package is out for delivery today."
+    - delivered: "Delivered! Hope you love your jewels."
+    """
+    import hashlib
+    
+    try:
+        # Config
+        sender_alias = os.getenv("EMAIL_FROM", os.getenv("EMAIL_USER"))
+        resend_api_key = os.getenv("RESEND_API_KEY")
+        email_provider = os.getenv("EMAIL_PROVIDER", "resend").lower()
+        frontend_url = os.getenv("FRONTEND_URL", "https://varahajewels.in")
+        
+        customer_email = order.email
+        if not customer_email:
+            logger.warning(f"No email for order {order.order_id} - skipping notification")
+            return
+        
+        # Generate tracking token
+        tracking_secret = os.getenv("TRACKING_SECRET", "varaha_track_secret_2026")
+        tracking_token = hashlib.sha256(f"{order.order_id}_{tracking_secret}".encode()).hexdigest()[:16]
+        tracking_url = f"{frontend_url}/track/{order.order_id}_{tracking_token}"
+        
+        subject = None
+        body_html = None
+        
+        # Status-specific templates
+        if status == "shipped":
+            subject = f"📦 Your Varaha Piece has been Shipped! - {order.order_id}"
+            body_html = f"""
+            <div style="font-family: 'Helvetica', sans-serif; max-width: 600px; margin: 0 auto; background: #fff; border: 1px solid #e0d8c3;">
+                <div style="text-align: center; padding: 30px; background: linear-gradient(135deg, #1a1a1a 0%, #333 100%);">
+                    <img src="https://res.cloudinary.com/dd5zrsmok/image/upload/v1766342264/logo_hvef6t.png" width="150" alt="Varaha Jewels">
+                </div>
+                <div style="padding: 40px; text-align: center;">
+                    <h2 style="font-family: 'Georgia', serif; color: #1a1a1a; margin-bottom: 20px;">Your Treasure is on the Way! 📦</h2>
+                    <p style="color: #666; line-height: 1.8; font-size: 16px;">
+                        Namaste <strong>{order.customer_name.split()[0] if order.customer_name else 'Customer'}</strong>,<br><br>
+                        Your Varaha piece has been carefully packed and shipped. It's now making its way to you!
+                    </p>
+                    
+                    <div style="background: #faf9f6; padding: 20px; margin: 30px 0; border: 1px solid #e8e3d6; text-align: left;">
+                        <p style="margin: 8px 0;"><strong>AWB Number:</strong> {order.awb_number or 'Pending'}</p>
+                        <p style="margin: 8px 0;"><strong>Courier:</strong> {order.courier_name or 'RapidShyp'}</p>
+                    </div>
+                    
+                    <a href="{tracking_url}" style="background: #c5a059; color: #fff; padding: 15px 40px; text-decoration: none; display: inline-block; font-size: 14px; text-transform: uppercase; letter-spacing: 2px; margin-top: 20px;">
+                        Track Your Order
+                    </a>
+                </div>
+                <div style="text-align: center; padding: 20px; background: #f4f1ea; font-size: 11px; color: #888;">
+                    © 2025 Varaha Jewels | Where Heritage Meets Royalty
+                </div>
+            </div>
+            """
+            
+        elif status == "out_for_delivery":
+            subject = f"🚚 Your Package is Out for Delivery! - {order.order_id}"
+            body_html = f"""
+            <div style="font-family: 'Helvetica', sans-serif; max-width: 600px; margin: 0 auto; background: #fff; border: 1px solid #e0d8c3;">
+                <div style="text-align: center; padding: 30px; background: linear-gradient(135deg, #c5a059 0%, #a8893c 100%);">
+                    <img src="https://res.cloudinary.com/dd5zrsmok/image/upload/v1766342264/logo_hvef6t.png" width="150" alt="Varaha Jewels">
+                </div>
+                <div style="padding: 40px; text-align: center;">
+                    <h2 style="font-family: 'Georgia', serif; color: #1a1a1a; margin-bottom: 20px;">Almost There! 🚚</h2>
+                    <p style="color: #666; line-height: 1.8; font-size: 16px;">
+                        Exciting news <strong>{order.customer_name.split()[0] if order.customer_name else 'Customer'}</strong>!<br><br>
+                        Your Varaha jewellery is <strong style="color: #c5a059;">out for delivery today</strong>. Please ensure someone is available to receive it.
+                    </p>
+                    
+                    <div style="background: #e8f5e9; padding: 20px; margin: 30px 0; border: 1px solid #c8e6c9; border-radius: 8px;">
+                        <p style="color: #2e7d32; font-size: 18px; margin: 0;">📍 Delivery Expected Today</p>
+                    </div>
+                    
+                    <a href="{tracking_url}" style="background: #1a1a1a; color: #c5a059; padding: 15px 40px; text-decoration: none; display: inline-block; font-size: 14px; text-transform: uppercase; letter-spacing: 2px;">
+                        Track Live
+                    </a>
+                </div>
+            </div>
+            """
+            
+        elif status == "delivered":
+            subject = f"✨ Your Varaha Jewels have been Delivered! - {order.order_id}"
+            body_html = f"""
+            <div style="font-family: 'Helvetica', sans-serif; max-width: 600px; margin: 0 auto; background: #fff; border: 1px solid #e0d8c3;">
+                <div style="text-align: center; padding: 40px; background: linear-gradient(135deg, #1a5e3a 0%, #2e7d32 100%);">
+                    <span style="font-size: 60px;">✨</span>
+                </div>
+                <div style="padding: 40px; text-align: center;">
+                    <h2 style="font-family: 'Georgia', serif; color: #1a1a1a; margin-bottom: 20px;">Your Treasure has Arrived!</h2>
+                    <p style="color: #666; line-height: 1.8; font-size: 16px;">
+                        Dear <strong>{order.customer_name.split()[0] if order.customer_name else 'Customer'}</strong>,<br><br>
+                        We hope your Varaha piece brings you immense joy and becomes a cherished part of your collection.
+                    </p>
+                    
+                    <div style="background: #fff8e1; padding: 25px; margin: 30px 0; border: 1px solid #ffe082; border-radius: 8px;">
+                        <p style="color: #f57c00; font-size: 16px; margin: 0 0 10px 0;">💭 We'd love your feedback!</p>
+                        <p style="color: #666; font-size: 14px; margin: 0;">Share your experience and tag us on Instagram @varahajewels</p>
+                    </div>
+                    
+                    <a href="{frontend_url}/account" style="background: #c5a059; color: #fff; padding: 15px 40px; text-decoration: none; display: inline-block; font-size: 14px; text-transform: uppercase; letter-spacing: 2px;">
+                        Rate Your Purchase
+                    </a>
+                </div>
+                <div style="text-align: center; padding: 20px; background: #f4f1ea; font-size: 11px; color: #888;">
+                    Thank you for choosing Varaha Jewels ♦ Where Heritage Meets Royalty
+                </div>
+            </div>
+            """
+        else:
+            # No notification for other statuses
+            return
+        
+        # Send via Resend
+        if email_provider == 'resend' and resend_api_key:
+            resend.api_key = resend_api_key
+            result = resend.Emails.send({
+                "from": f"Varaha Jewels <{sender_alias}>" if sender_alias and '@' in sender_alias else "onboarding@resend.dev",
+                "to": customer_email,
+                "subject": subject,
+                "html": body_html
+            })
+            logger.info(f"Tracking notification ({status}) sent to {customer_email}. ID: {result.get('id')}")
+        else:
+            logger.warning(f"Tracking notification skipped: Provider not configured")
+            
+    except Exception as e:
+        logger.error(f"Failed to send tracking notification ({status}): {str(e)}")
+

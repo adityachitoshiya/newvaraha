@@ -48,6 +48,7 @@ class Order(OrderBase, table=True):
     shipping_id: Optional[str] = None # RapidShyp Order ID
     awb_number: Optional[str] = None
     courier_name: Optional[str] = None
+    tracking_data: Optional[str] = None # JSON array of scan activities
     user_id: Optional[uuid.UUID] = Field(default=None, index=True)
     label_url: Optional[str] = None
     manifest_url: Optional[str] = None
