@@ -159,3 +159,44 @@ def update_metal_rates(
     session.commit()
     session.refresh(rates)
     return rates
+
+# ==========================================
+# ⚡ FLASH DELIVERY PIN CODES
+# ==========================================
+from models import FlashPincode
+from pydantic import BaseModel
+from typing import List, Optional
+
+class FlashPincodeCreate(BaseModel):
+    pincode: str
+    area_name: Optional[str] = None
+
+@router.get("/api/settings/flash-pincodes")
+def get_flash_pincodes(session: Session = Depends(get_session)):
+    """Get all Flash Delivery PIN codes"""
+    pincodes = session.exec(select(FlashPincode)).all()
+    return pincodes
+
+@router.post("/api/settings/flash-pincodes")
+def add_flash_pincode(data: FlashPincodeCreate, session: Session = Depends(get_session)):
+    """Add a new Flash Delivery PIN code"""
+    existing = session.exec(select(FlashPincode).where(FlashPincode.pincode == data.pincode)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Pincode already exists")
+    
+    new_pin = FlashPincode(pincode=data.pincode, area_name=data.area_name)
+    session.add(new_pin)
+    session.commit()
+    session.refresh(new_pin)
+    return new_pin
+
+@router.delete("/api/settings/flash-pincodes/{pincode}")
+def delete_flash_pincode(pincode: str, session: Session = Depends(get_session)):
+    """Delete a Flash Delivery PIN code"""
+    existing = session.exec(select(FlashPincode).where(FlashPincode.pincode == pincode)).first()
+    if not existing:
+        raise HTTPException(status_code=404, detail="Pincode not found")
+    
+    session.delete(existing)
+    session.commit()
+    return {"ok": True, "deleted": pincode}

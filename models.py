@@ -263,3 +263,9 @@ class SystemSetting(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
   # Admin username
 
+class FlashPincode(SQLModel, table=True):
+    """PIN codes eligible for Flash Delivery (2-4 hours)"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    pincode: str = Field(index=True, unique=True)
+    area_name: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)

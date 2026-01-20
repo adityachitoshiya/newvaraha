@@ -792,14 +792,11 @@ def check_serviceability(req: ServiceabilityCheck, session: Session = Depends(ge
         return format_simple_response(False)
 
     # 2. SIMULATION (RapidShyp Disabled)
-    # Check for Flash Delivery (Jaipur)
-    FLASH_PINCODES = [
-        "302001", "302015", "302018", "302016", "302029", 
-        "302020", "302021", "302039", "302012", 
-        "302004", "302003", "302017", "302002"
-    ]
+    # Check for Flash Delivery from Database
+    from models import FlashPincode
+    flash_pin_obj = session.exec(select(FlashPincode).where(FlashPincode.pincode == str(delivery_pincode))).first()
     
-    if str(delivery_pincode) in FLASH_PINCODES:
+    if flash_pin_obj:
         return {
             "available": True,
             "date": "Today (2-4 Hrs)",
