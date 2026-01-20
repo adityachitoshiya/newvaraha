@@ -200,3 +200,34 @@ def delete_flash_pincode(pincode: str, session: Session = Depends(get_session)):
     session.delete(existing)
     session.commit()
     return {"ok": True, "deleted": pincode}
+
+# ==========================================
+# 🌍 GEO-BLOCKING (Blocked Regions)
+# ==========================================
+from models import BlockedRegion
+
+@router.get("/api/settings/blocked-regions")
+def get_blocked_regions(session: Session = Depends(get_session)):
+    """Get all regions with their block status"""
+    regions = session.exec(select(BlockedRegion).order_by(BlockedRegion.region_name)).all()
+    return regions
+
+@router.get("/api/settings/blocked-regions/active")
+def get_active_blocked_regions(session: Session = Depends(get_session)):
+    """Get only actively blocked region codes (for frontend middleware)"""
+    regions = session.exec(select(BlockedRegion).where(BlockedRegion.is_blocked == True)).all()
+    return [r.region_code for r in regions]
+
+@router.put("/api/settings/blocked-regions/{region_code}")
+def toggle_blocked_region(region_code: str, session: Session = Depends(get_session)):
+    """Toggle the block status of a region"""
+    region = session.exec(select(BlockedRegion).where(BlockedRegion.region_code == region_code)).first()
+    if not region:
+        raise HTTPException(status_code=404, detail="Region not found")
+    
+    region.is_blocked = not region.is_blocked
+    session.add(region)
+    session.commit()
+    session.refresh(region)
+    return region
+

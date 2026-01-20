@@ -269,3 +269,12 @@ class FlashPincode(SQLModel, table=True):
     pincode: str = Field(index=True, unique=True)
     area_name: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class BlockedRegion(SQLModel, table=True):
+    """Regions blocked from accessing the website (Geo-blocking)"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    region_code: str = Field(index=True, unique=True)  # ISO code like 'GJ', 'MH'
+    region_name: str  # Full name like 'Gujarat', 'Maharashtra'
+    is_blocked: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
