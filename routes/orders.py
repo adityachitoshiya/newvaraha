@@ -792,5 +792,21 @@ def check_serviceability(req: ServiceabilityCheck, session: Session = Depends(ge
         return format_simple_response(False)
 
     # 2. SIMULATION (RapidShyp Disabled)
+    # Check for Flash Delivery (Jaipur)
+    FLASH_PINCODES = [
+        "302001", "302015", "302018", "302016", "302029", 
+        "302020", "302021", "302039", "302012", 
+        "302004", "302003", "302017", "302002"
+    ]
+    
+    if str(delivery_pincode) in FLASH_PINCODES:
+        return {
+            "available": True,
+            "date": "Today (2-4 Hrs)",
+            "cod": True,
+            "message": "⚡ Flash Delivery Available (2-4 Hrs)",
+            "is_flash": True
+        }
+
     d = datetime.now() + timedelta(days=5)
     return format_simple_response(True, date_str=d.strftime("%d %b, %a"), cod=True)
