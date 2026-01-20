@@ -50,84 +50,129 @@ RAPIDSHYP_STATUS_MAP = {
 async def rapidshyp_webhook(request: Request, session: Session = Depends(get_session)):
     """
     Webhook endpoint for RapidShyp status updates.
-    RapidShyp will POST updates when shipment status changes.
+    RapidShyp sends nested payload with records[].shipment_details[].track_scans[]
     """
     try:
         payload = await request.json()
-        print(f"[WEBHOOK] Received RapidShyp update: {json.dumps(payload, indent=2)}")
+        print(f"[WEBHOOK] Received RapidShyp update")
         
-        # Extract relevant fields
-        awb = payload.get("awb") or payload.get("awb_number")
-        order_id = payload.get("order_id") or payload.get("seller_order_id")
-        status = payload.get("status") or payload.get("current_status")
-        scan_data = payload.get("scans") or payload.get("tracking_history") or []
-        location = payload.get("location") or payload.get("current_location")
-        timestamp = payload.get("timestamp") or payload.get("scan_datetime")
+        # Handle RapidShyp's nested structure
+        records = payload.get("records") or []
         
-        # Find order by AWB or order_id
-        order = None
-        if awb:
-            order = session.exec(select(Order).where(Order.awb_number == awb)).first()
-        if not order and order_id:
-            order = session.exec(select(Order).where(Order.order_id == order_id)).first()
+        if not records:
+            # Fallback to flat structure (old format)
+            awb = payload.get("awb") or payload.get("awb_number")
+            order_id = payload.get("order_id") or payload.get("seller_order_id")
+            status = payload.get("status") or payload.get("current_status")
+            
+            if not awb and not order_id:
+                return {"status": "ignored", "reason": "no_records"}
+            
+            records = [{
+                "seller_order_id": order_id,
+                "shipment_details": [{
+                    "awb": awb,
+                    "shipment_status": status,
+                    "track_scans": payload.get("scans") or []
+                }]
+            }]
         
-        if not order:
-            print(f"[WEBHOOK] Order not found for AWB={awb}, OrderID={order_id}")
-            return {"status": "ignored", "reason": "order_not_found"}
+        updated_orders = []
         
-        # Update order status
-        varaha_status = RAPIDSHYP_STATUS_MAP.get(status.upper() if status else "", order.status)
+        for record in records:
+            seller_order_id = record.get("seller_order_id")
+            shipments = record.get("shipment_details") or []
+            
+            for shipment in shipments:
+                awb = shipment.get("awb")
+                shipment_status = shipment.get("shipment_status") or shipment.get("current_tracking_status_code")
+                courier_name = shipment.get("courier_name")
+                track_scans = shipment.get("track_scans") or []
+                
+                # Find order by AWB or seller_order_id
+                order = None
+                if awb:
+                    order = session.exec(select(Order).where(Order.awb_number == awb)).first()
+                if not order and seller_order_id:
+                    order = session.exec(select(Order).where(Order.order_id == seller_order_id)).first()
+                
+                if not order:
+                    print(f"[WEBHOOK] Order not found for AWB={awb}, OrderID={seller_order_id}")
+                    continue
+                
+                # Map RapidShyp status codes to Varaha status
+                status_code_map = {
+                    "PSH": "packed",
+                    "PUC": "shipped",
+                    "SPD": "shipped",
+                    "INT": "in_transit",
+                    "RAD": "in_transit",
+                    "OFD": "out_for_delivery",
+                    "DEL": "delivered",
+                    "DELIVERED": "delivered",
+                    "RTO": "rto",
+                    "RTO_INT": "rto",
+                    "RTO_OFD": "rto",
+                    "RTO_DEL": "rto_delivered",
+                    "UND": "undelivered"
+                }
+                
+                # Get status from shipment_status or latest scan
+                varaha_status = order.status
+                if shipment_status:
+                    varaha_status = status_code_map.get(shipment_status.upper(), 
+                                    RAPIDSHYP_STATUS_MAP.get(shipment_status.upper(), order.status))
+                
+                # Convert track_scans to our format
+                tracking_history = []
+                for scan in track_scans:
+                    tracking_history.append({
+                        "status": scan.get("scan", ""),
+                        "location": scan.get("scan_location", ""),
+                        "timestamp": scan.get("scan_datetime", ""),
+                        "status_code": scan.get("rapidshyp_status_code", "")
+                    })
+                
+                # Update order
+                order.status = varaha_status
+                order.tracking_data = json.dumps(tracking_history)
+                if courier_name:
+                    order.courier_name = courier_name
+                
+                # Update status_history
+                try:
+                    status_hist = json.loads(order.status_history or "[]")
+                except:
+                    status_hist = []
+                
+                status_hist.append({
+                    "status": varaha_status,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "comment": f"RapidShyp: {shipment_status}"
+                })
+                order.status_history = json.dumps(status_hist)
+                
+                session.add(order)
+                updated_orders.append(order.order_id)
+                
+                print(f"[WEBHOOK] Order {order.order_id} updated to status: {varaha_status}")
+                
+                # Trigger notifications for key statuses
+                try:
+                    from notifications import send_tracking_notification
+                    if varaha_status in ["shipped", "out_for_delivery", "delivered"]:
+                        send_tracking_notification(order, varaha_status)
+                except Exception as e:
+                    print(f"[WEBHOOK] Notification error: {e}")
         
-        # Build tracking entry
-        new_scan = {
-            "status": status,
-            "location": location,
-            "timestamp": timestamp or datetime.utcnow().isoformat(),
-            "description": payload.get("status_description") or payload.get("remarks") or ""
-        }
-        
-        # Get existing tracking data
-        try:
-            tracking_history = json.loads(order.tracking_data or "[]")
-        except:
-            tracking_history = []
-        
-        # Append new scan
-        tracking_history.append(new_scan)
-        
-        # Update order
-        order.status = varaha_status
-        order.tracking_data = json.dumps(tracking_history)
-        
-        # Update status_history
-        try:
-            status_hist = json.loads(order.status_history or "[]")
-        except:
-            status_hist = []
-        
-        status_hist.append({
-            "status": varaha_status,
-            "timestamp": datetime.utcnow().isoformat(),
-            "comment": f"RapidShyp: {status}"
-        })
-        order.status_history = json.dumps(status_hist)
-        
-        session.add(order)
         session.commit()
         
-        print(f"[WEBHOOK] Order {order.order_id} updated to status: {varaha_status}")
-        
-        # Trigger notifications based on status
-        try:
-            from notifications import send_tracking_notification
-            send_tracking_notification(order, varaha_status)
-        except Exception as e:
-            print(f"[WEBHOOK] Notification error: {e}")
-        
-        return {"status": "success", "order_id": order.order_id, "new_status": varaha_status}
+        return {"status": "success", "updated_orders": updated_orders}
         
     except Exception as e:
         print(f"[WEBHOOK] Error processing webhook: {e}")
+        import traceback
+        traceback.print_exc()
         return {"status": "error", "message": str(e)}
 
 @router.get("/api/orders/{order_id}/track")
