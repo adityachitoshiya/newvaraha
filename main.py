@@ -9,7 +9,7 @@ from database import create_db_and_tables
 
 from middleware import MonitoringMiddleware
 # Import Routers
-from routes import auth, products, orders, cart, gateways, admin, settings, customer, coupons, analytics, web, health, dashboard, notifications
+from routes import auth, products, orders, cart, gateways, admin, settings, customer, coupons, analytics, web, health, dashboard, notifications, reports
 
 import logging
 from monitoring import monitor
@@ -82,3 +82,4 @@ app.include_router(analytics.router, tags=["Analytics"])
 app.include_router(health.router, tags=["Health"])
 app.include_router(dashboard.router, tags=["Dashboard"])
 app.include_router(notifications.router, tags=["Notifications"])
+app.include_router(reports.router, tags=["Reports"])

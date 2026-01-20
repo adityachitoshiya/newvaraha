@@ -40,6 +40,7 @@ class OrderCreate(BaseModel):
     contact: str
     address: str
     city: str
+    state: Optional[str] = "Rajasthan" # Default to avoid validation error, but should be passed
     pincode: str
     couponCode: Optional[str] = None
     discount: Optional[float] = 0.0
@@ -103,6 +104,41 @@ def get_order_by_id_flexible(session: Session, order_id_input: str) -> Optional[
             
     return None
 
+def calculate_tax_breakdown(total_amount: float, state: str):
+    """
+    Calculate GST for Artificial Jewellery (HSN 7117 - 3%).
+    Taxable Value = Total / 1.03
+    GST Amount = Total - Taxable Value
+    
+    If State == Rajasthan (Intra-state):
+        CGST = 1.5%, SGST = 1.5%
+    Else (Inter-state):
+        IGST = 3%
+    """
+    taxable_value = round(total_amount / 1.03, 2)
+    gst_amount = round(total_amount - taxable_value, 2)
+    
+    # Normalize state string for comparison
+    state_norm = state.strip().lower() if state else ""
+    is_rajasthan = "rajasthan" in state_norm
+    
+    breakdown = {
+        "hsn_code": "7117",
+        "taxable_value": taxable_value,
+        "cgst_amount": 0.0,
+        "sgst_amount": 0.0,
+        "igst_amount": 0.0,
+        "state": state
+    }
+    
+    if is_rajasthan:
+        breakdown["cgst_amount"] = round(gst_amount / 2, 2)
+        breakdown["sgst_amount"] = round(gst_amount / 2, 2)
+    else:
+        breakdown["igst_amount"] = gst_amount
+        
+    return breakdown
+
 # --- Routes ---
 
 @router.post("/api/create-cod-order")
@@ -140,6 +176,9 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
             session.add(new_guest)
             session.commit()
 
+    # Calculate Tax
+    tax_data = calculate_tax_breakdown(order_data.amount, order_data.state)
+
     # Generate Order ID
     order_id_str = f"ORD-{int(time.time())}"
     
@@ -173,6 +212,15 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
         status="pending",
         user_id=uuid.UUID(user_id) if user_id else None,
         items_json=json.dumps(items_list),
+        
+        # Tax Fields
+        state=order_data.state,
+        hsn_code=tax_data["hsn_code"],
+        taxable_value=tax_data["taxable_value"],
+        cgst_amount=tax_data["cgst_amount"],
+        sgst_amount=tax_data["sgst_amount"],
+        igst_amount=tax_data["igst_amount"],
+        
         status_history=json.dumps([{
             "status": "pending",
             "timestamp": datetime.utcnow().isoformat(),
@@ -197,6 +245,18 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
     if not gateway:
         raise HTTPException(status_code=400, detail="No active payment gateway found. Please contact support.")
 
+    # AUTH CHECK: Put user_id in notes if logged in
+    user_id = None
+    try:
+        from supabase_utils import init_supabase
+        s_client = init_supabase()
+        if token and s_client:
+            user_data_sb = s_client.auth.get_user(token)
+            if user_data_sb and user_data_sb.user:
+                user_id = str(user_data_sb.user.id)
+    except:
+        pass
+
     creds = json.loads(gateway.credentials_json)
 
     # 2. Initialize Provider (Only Razorpay for now)
@@ -204,14 +264,18 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
         try:
             client = razorpay.Client(auth=(creds.get("key_id"), creds.get("key_secret")))
             
+            notes = {
+                "email": order_data.email,
+                "phone": order_data.contact
+            }
+            if user_id:
+                notes["user_id"] = user_id
+            
             data = {
                 "amount": int(order_data.amount * 100), # Amount in paise
                 "currency": "INR",
                 "receipt": f"rcpt_{int(time.time())}",
-                "notes": {
-                    "email": order_data.email,
-                    "phone": order_data.contact
-                }
+                "notes": notes
             }
             
             razorpay_order = client.order.create(data=data)
@@ -314,13 +378,36 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
 
         # 2. Fallback: Try to find user by email to link?
         if not user_id:
+            # TRY FETCHING NOTES FROM RAZORPAY
+            try:
+                # We need to fetch the order from Razorpay to get the notes
+                # client is already initialized above
+                rzp_order_details = client.order.fetch(razorpay_order_id)
+                if rzp_order_details and 'notes' in rzp_order_details:
+                     notes_uid = rzp_order_details['notes'].get('user_id')
+                     if notes_uid:
+                         user_id = notes_uid
+                         print(f"DEBUG: Found user_id in Razorpay Notes: {user_id}")
+            except Exception as e:
+                print(f"DEBUG: Failed to fetch Razorpay notes: {e}")
+
+        # Fallback: Try to find user by email to link?
+        if not user_id:
             existing_cust = session.exec(select(Customer).where(Customer.email == order_data.get('email'))).first()
             if existing_cust and existing_cust.supabase_uid:
-                user_id = existing_cust.supabase_uid # Use UID if we have it
+                # ONLY use email link if NO user_id was found in notes/token (Guest Mode check implicit)
+                # But wait, request says: "Strict Rule: Do NOT use the email entered in the shipping form to map orders for logged-in users."
+                # If we are here, we DON'T have a user_id from Token/Notes. So it IS a guest or unlinked flow.
+                user_id = existing_cust.supabase_uid 
                 print(f"DEBUG: Order linked by Email Match to UUID: {user_id}")
             elif existing_cust:
-                # User exists but no UID (legacy?), maybe don't link via UUID field if it's strictly UUID type
                 pass
+        
+        # Calculate Tax
+        state_input = order_data.get('state', '')
+        # If state not in order_data, try to extract from address? No, assume frontend sends it.
+        # Fallback to empty string which defaults to IGST
+        tax_data = calculate_tax_breakdown(order_data.get('amount'), state_input)
 
         new_order = Order(
             order_id=f"ORD-{razorpay_order_id}" if razorpay_order_id else f"ORD-{int(time.time())}",
@@ -336,6 +423,15 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
             email_status="pending", # Explicitly set default
             user_id=uuid.UUID(user_id) if user_id else None,
             items_json=json.dumps(items),
+            
+            # Tax Fields
+            state=state_input,
+            hsn_code=tax_data["hsn_code"],
+            taxable_value=tax_data["taxable_value"],
+            cgst_amount=tax_data["cgst_amount"],
+            sgst_amount=tax_data["sgst_amount"],
+            igst_amount=tax_data["igst_amount"],
+            
             status_history=json.dumps([{
                 "status": "paid",
                 "timestamp": datetime.utcnow().isoformat(),

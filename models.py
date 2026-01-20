@@ -51,6 +51,14 @@ class Order(OrderBase, table=True):
     user_id: Optional[uuid.UUID] = Field(default=None, index=True)
     label_url: Optional[str] = None
     manifest_url: Optional[str] = None
+    
+    # Tax & Location Fields
+    state: Optional[str] = None
+    hsn_code: str = "7117"
+    taxable_value: float = 0.0
+    cgst_amount: float = 0.0
+    sgst_amount: float = 0.0
+    igst_amount: float = 0.0
 
 class AdminUser(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -147,6 +155,7 @@ class StoreSettings(SQLModel, table=True):
     rapidshyp_enabled: str = "false"  # Enable/disable RapidShyp API calls
     heritage_video_desktop: Optional[str] = None
     heritage_video_mobile: Optional[str] = None
+    gstin: Optional[str] = "08CBRPC0024J1ZT" # Updated to real GSTIN
 
 
 
