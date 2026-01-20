@@ -155,6 +155,8 @@ class StoreSettings(SQLModel, table=True):
     rapidshyp_enabled: str = "false"  # Enable/disable RapidShyp API calls
     heritage_video_desktop: Optional[str] = None
     heritage_video_mobile: Optional[str] = None
+    ciplx_video_desktop: Optional[str] = None
+    ciplx_video_mobile: Optional[str] = None
     gstin: Optional[str] = "08CBRPC0024J1ZT" # Updated to real GSTIN
 
 
