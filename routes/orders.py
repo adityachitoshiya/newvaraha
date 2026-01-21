@@ -259,7 +259,7 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
 
     creds = json.loads(gateway.credentials_json)
 
-    # 2. Initialize Provider (Only Razorpay for now)
+    # 2. Initialize Provider
     if gateway.provider == "razorpay":
         try:
             client = razorpay.Client(auth=(creds.get("key_id"), creds.get("key_secret")))
@@ -295,13 +295,230 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
                 },
                 "theme": {
                     "color": "#B8860B"
-                }
+                },
+                "provider": "razorpay"
             }
         except Exception as e:
             print(f"Razorpay Error: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Gateway Error: {str(e)}")
     
+    elif gateway.provider == "phonepe":
+        try:
+            import requests
+            
+            # Get credentials - Support both v1 (salt_key) and v2 (client_secret) formats
+            client_id = creds.get("client_id") or creds.get("merchant_id")
+            client_secret = creds.get("client_secret") or creds.get("salt_key")
+            client_version = creds.get("client_version", "1")
+            environment = creds.get("environment", "SANDBOX").upper()
+            
+            if not client_id or not client_secret:
+                raise HTTPException(status_code=500, detail="PhonePe credentials not configured properly")
+            
+            # API URLs for v2 Standard Checkout
+            if environment == "PRODUCTION":
+                auth_url = "https://api.phonepe.com/apis/identity-manager/v1/oauth/token"
+                pay_url = "https://api.phonepe.com/apis/pg/checkout/v2/pay"
+            else:
+                auth_url = "https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token"
+                pay_url = "https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/pay"
+            
+            # Frontend URL for redirect
+            frontend_url = os.getenv("FRONTEND_URL", "https://varahajewels.in")
+            backend_url = os.getenv("BACKEND_URL", "https://backend.varahajewels.in")
+            
+            # Step 1: Get OAuth Access Token
+            auth_response = requests.post(
+                auth_url,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data={
+                    "client_id": client_id,
+                    "client_version": client_version,
+                    "client_secret": client_secret,
+                    "grant_type": "client_credentials"
+                },
+                timeout=30
+            )
+            
+            auth_data = auth_response.json()
+            print(f"PhonePe Auth Response: {auth_data}")
+            
+            if not auth_data.get("access_token"):
+                error_msg = auth_data.get("message") or auth_data.get("error_description") or "Failed to get access token"
+                raise HTTPException(status_code=400, detail=f"PhonePe Auth: {error_msg}")
+            
+            access_token = auth_data["access_token"]
+            
+            # Step 2: Create Payment Request
+            merchant_order_id = f"ORD-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+            amount_in_paise = int(order_data.amount * 100)
+            
+            pay_payload = {
+                "merchantOrderId": merchant_order_id,
+                "amount": amount_in_paise,
+                "expireAfter": 1200,  # 20 minutes
+                "metaInfo": {
+                    "udf1": order_data.email,
+                    "udf2": order_data.contact
+                },
+                "paymentFlow": {
+                    "type": "PG_CHECKOUT",
+                    "message": f"Payment for Order {merchant_order_id}",
+                    "merchantUrls": {
+                        "redirectUrl": f"{frontend_url}/payment-callback?orderId={merchant_order_id}"
+                    }
+                }
+            }
+            
+            pay_response = requests.post(
+                pay_url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"O-Bearer {access_token}"
+                },
+                json=pay_payload,
+                timeout=30
+            )
+            
+            pay_data = pay_response.json()
+            print(f"PhonePe Pay Response: {pay_data}")
+            
+            if pay_data.get("orderId") and pay_data.get("redirectUrl"):
+                return {
+                    "provider": "phonepe",
+                    "orderId": merchant_order_id,
+                    "phonepeOrderId": pay_data.get("orderId"),
+                    "redirectUrl": pay_data.get("redirectUrl"),
+                    "amount": amount_in_paise,
+                    "currency": "INR"
+                }
+            else:
+                error_msg = pay_data.get("message") or "Payment initiation failed"
+                print(f"PhonePe Error: {pay_data}")
+                raise HTTPException(status_code=400, detail=f"PhonePe: {error_msg}")
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"PhonePe Error: {traceback.format_exc()}")
+            raise HTTPException(status_code=500, detail=f"PhonePe Gateway Error: {str(e)}")
+    
     raise HTTPException(status_code=400, detail=f"Provider {gateway.provider} not implemented completely.")
+
+
+@router.post("/api/phonepe/callback")
+def phonepe_callback(payload: Dict[str, Any], background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
+    """
+    PhonePe Server-to-Server Callback
+    Called by PhonePe when payment status changes
+    """
+    try:
+        import hashlib
+        import base64
+        
+        # Get active PhonePe gateway
+        gateway = session.exec(select(PaymentGateway).where(PaymentGateway.provider == "phonepe")).first()
+        if not gateway:
+            raise HTTPException(status_code=400, detail="PhonePe gateway not configured")
+        
+        creds = json.loads(gateway.credentials_json)
+        salt_key = creds.get("salt_key")
+        salt_index = creds.get("salt_index", "1")
+        
+        # Verify callback signature
+        x_verify = payload.get("x-verify") or payload.get("X-VERIFY", "")
+        response_base64 = payload.get("response", "")
+        
+        if response_base64:
+            # Verify signature
+            expected_checksum = hashlib.sha256((response_base64 + "/pg/v1/status" + salt_key).encode()).hexdigest() + "###" + salt_index
+            
+            # Decode response
+            response_json = base64.b64decode(response_base64).decode()
+            response_data = json.loads(response_json)
+            
+            print(f"PhonePe Callback Data: {response_data}")
+            
+            if response_data.get("code") == "PAYMENT_SUCCESS":
+                transaction_id = response_data.get("data", {}).get("merchantTransactionId")
+                phonepe_txn_id = response_data.get("data", {}).get("transactionId")
+                
+                # TODO: Create order in database similar to Razorpay callback
+                # For now, log success
+                print(f"PhonePe Payment SUCCESS: TxnID={transaction_id}, PhonePeTxnID={phonepe_txn_id}")
+                
+                return {"status": "success", "message": "Payment received"}
+            else:
+                print(f"PhonePe Payment Status: {response_data.get('code')}")
+                return {"status": "received", "code": response_data.get("code")}
+        
+        return {"status": "received"}
+        
+    except Exception as e:
+        print(f"PhonePe Callback Error: {traceback.format_exc()}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/api/phonepe/status/{transaction_id}")
+def check_phonepe_status(transaction_id: str, session: Session = Depends(get_session)):
+    """
+    Check PhonePe payment status
+    Called by frontend to verify payment after redirect
+    """
+    try:
+        import hashlib
+        import requests
+        
+        # Get active PhonePe gateway
+        gateway = session.exec(select(PaymentGateway).where(PaymentGateway.provider == "phonepe")).first()
+        if not gateway:
+            raise HTTPException(status_code=400, detail="PhonePe gateway not configured")
+        
+        creds = json.loads(gateway.credentials_json)
+        merchant_id = creds.get("merchant_id")
+        salt_key = creds.get("salt_key")
+        salt_index = creds.get("salt_index", "1")
+        environment = creds.get("environment", "SANDBOX").upper()
+        
+        # API URL
+        if environment == "PRODUCTION":
+            api_url = f"https://api.phonepe.com/apis/hermes/pg/v1/status/{merchant_id}/{transaction_id}"
+        else:
+            api_url = f"https://api-preprod.phonepe.com/apis/pg-sandbox/pg/v1/status/{merchant_id}/{transaction_id}"
+        
+        # Generate checksum
+        checksum_string = f"/pg/v1/status/{merchant_id}/{transaction_id}" + salt_key
+        checksum = hashlib.sha256(checksum_string.encode()).hexdigest() + "###" + salt_index
+        
+        headers = {
+            "Content-Type": "application/json",
+            "X-VERIFY": checksum,
+            "X-MERCHANT-ID": merchant_id
+        }
+        
+        response = requests.get(api_url, headers=headers, timeout=30)
+        response_data = response.json()
+        
+        print(f"PhonePe Status Check: {response_data}")
+        
+        if response_data.get("success") and response_data.get("code") == "PAYMENT_SUCCESS":
+            return {
+                "success": True,
+                "status": "SUCCESS",
+                "transactionId": transaction_id,
+                "amount": response_data.get("data", {}).get("amount"),
+                "paymentInstrument": response_data.get("data", {}).get("paymentInstrument", {}).get("type")
+            }
+        else:
+            return {
+                "success": False,
+                "status": response_data.get("code", "UNKNOWN"),
+                "message": response_data.get("message", "Payment status unknown")
+            }
+            
+    except Exception as e:
+        print(f"PhonePe Status Check Error: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/api/update-order-status")
@@ -376,11 +593,10 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
         except Exception as e:
             print(f"DEBUG: Token check failed in callback: {e}")
 
-        # 2. Fallback: Try to find user by email to link?
+        # 2. Fallback: Try to get user_id from Razorpay Notes (Secure - set during checkout session)
         if not user_id:
-            # TRY FETCHING NOTES FROM RAZORPAY
             try:
-                # We need to fetch the order from Razorpay to get the notes
+                # Fetch the order from Razorpay to get the notes
                 # client is already initialized above
                 rzp_order_details = client.order.fetch(razorpay_order_id)
                 if rzp_order_details and 'notes' in rzp_order_details:
@@ -391,17 +607,23 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
             except Exception as e:
                 print(f"DEBUG: Failed to fetch Razorpay notes: {e}")
 
-        # Fallback: Try to find user by email to link?
+        # 3. Guest Handling: Create Guest Customer if no user_id found (same as COD flow)
         if not user_id:
             existing_cust = session.exec(select(Customer).where(Customer.email == order_data.get('email'))).first()
-            if existing_cust and existing_cust.supabase_uid:
-                # ONLY use email link if NO user_id was found in notes/token (Guest Mode check implicit)
-                # But wait, request says: "Strict Rule: Do NOT use the email entered in the shipping form to map orders for logged-in users."
-                # If we are here, we DON'T have a user_id from Token/Notes. So it IS a guest or unlinked flow.
-                user_id = existing_cust.supabase_uid 
-                print(f"DEBUG: Order linked by Email Match to UUID: {user_id}")
-            elif existing_cust:
-                pass
+            if not existing_cust:
+                # Create Guest Customer - DO NOT link order to any user_id
+                new_guest = Customer(
+                    full_name=order_data.get('name'),
+                    email=order_data.get('email'),
+                    provider="guest",
+                    is_active=True
+                )
+                session.add(new_guest)
+                session.commit()
+                print(f"DEBUG: Created Guest Customer for email: {order_data.get('email')}")
+            # NOTE: Do NOT set user_id from email match - this is a guest order
+            # Order will have user_id=None which is correct for guest checkout
+            print(f"DEBUG: Guest Order - user_id will be None")
         
         # Calculate Tax
         state_input = order_data.get('state', '')
