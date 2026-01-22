@@ -973,7 +973,7 @@ def read_order(order_id: str, session: Session = Depends(get_session)):
 # --- RapidShyp Integration Routes ---
 
 @router.post("/api/admin/orders/{order_id}/ship")
-def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUser = Depends(get_session), session: Session = Depends(get_session)):
+def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: BackgroundTasks, current_user: AdminUser = Depends(get_session), session: Session = Depends(get_session)):
     # Find order
     order = get_order_by_id_flexible(session, order_id)
     if not order:
@@ -1011,6 +1011,10 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, current_user: AdminUse
         session.add(order)
         session.commit()
         session.refresh(order)
+        
+        # Trigger shipping notification email
+        background_tasks.add_task(send_shipping_notifications, order.dict())
+        print(f"DEBUG: Shipping notification triggered for mock shipment {mock_shipment_id}")
             
         return {"ok": True, "shipment": {"shipmentId": mock_shipment_id, "awb": mock_awb, "courierName": "Mock Courier"}}
 
