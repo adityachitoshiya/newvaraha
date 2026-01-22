@@ -336,3 +336,106 @@ def get_customer_returns(
     ).all()
     
     return returns
+
+
+from models import Order
+from pydantic import BaseModel
+from typing import Optional
+import json
+
+class ReturnRequest(BaseModel):
+    order_id: str
+    reason: str
+    description: Optional[str] = None
+    items: Optional[list] = None  # List of item indices to return (for partial returns)
+
+@router.post("/api/customer/returns")
+def create_return_request(
+    return_data: ReturnRequest,
+    current_user: Customer = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Create a new return request"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Find the order
+    order = session.exec(
+        select(Order).where(Order.order_id == return_data.order_id)
+    ).first()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    # Verify order belongs to this customer (by email or user_id)
+    if order.user_id:
+        # If order has user_id, it must match current user's supabase ID
+        # Note: current_user.id is the customer table ID, not supabase UUID
+        # For now, check email match
+        if order.email != current_user.email:
+            raise HTTPException(status_code=403, detail="Order does not belong to you")
+    else:
+        if order.email != current_user.email:
+            raise HTTPException(status_code=403, detail="Order does not belong to you")
+    
+    # Check if order is delivered
+    if order.status.lower() not in ['delivered', 'completed']:
+        raise HTTPException(status_code=400, detail="Return request can only be made for delivered orders")
+    
+    # Check 7-day return window
+    if order.updated_at:
+        days_since_delivery = (datetime.utcnow() - order.updated_at).days
+        if days_since_delivery > 7:
+            raise HTTPException(status_code=400, detail="Return window has expired (7 days from delivery)")
+    
+    # Check if return already exists for this order
+    existing_return = session.exec(
+        select(OrderReturn).where(OrderReturn.order_id == return_data.order_id)
+    ).first()
+    
+    if existing_return:
+        raise HTTPException(status_code=400, detail=f"Return request already exists. Status: {existing_return.status}")
+    
+    # Calculate refund amount (full amount for now, or partial if items specified)
+    refund_amount = order.total_amount
+    return_items = return_data.items or []
+    
+    # If specific items are specified, calculate partial refund
+    if return_items:
+        try:
+            order_items = json.loads(order.items_json) if order.items_json else []
+            partial_total = 0
+            selected_items = []
+            for idx in return_items:
+                if 0 <= idx < len(order_items):
+                    item = order_items[idx]
+                    partial_total += item.get('price', 0) * item.get('quantity', 1)
+                    selected_items.append(item)
+            refund_amount = partial_total
+            return_items = selected_items
+        except:
+            pass
+    
+    # Create return request
+    new_return = OrderReturn(
+        order_id=return_data.order_id,
+        customer_id=current_user.id,
+        reason=return_data.reason,
+        description=return_data.description,
+        status="pending",
+        refund_amount=refund_amount,
+        refund_method="original",
+        return_items=json.dumps(return_items) if return_items else "[]"
+    )
+    
+    session.add(new_return)
+    session.commit()
+    session.refresh(new_return)
+    
+    return {
+        "message": "Return request submitted successfully",
+        "return_id": new_return.id,
+        "status": new_return.status,
+        "refund_amount": new_return.refund_amount
+    }
+
