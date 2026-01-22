@@ -340,14 +340,17 @@ def get_customer_returns(
 
 from models import Order
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 import json
+import os
+import requests
 
 class ReturnRequest(BaseModel):
     order_id: str
     reason: str
     description: Optional[str] = None
     items: Optional[list] = None  # List of item indices to return (for partial returns)
+    images: Optional[List[str]] = None  # Image URLs from customer
 
 @router.post("/api/customer/returns")
 def create_return_request(
@@ -431,6 +434,84 @@ def create_return_request(
     session.add(new_return)
     session.commit()
     session.refresh(new_return)
+    
+    # --- Send Telegram Notification ---
+    try:
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        frontend_url = os.getenv("FRONTEND_URL", "https://varahajewels.in")
+        
+        if bot_token and chat_id:
+            # Parse order items for product details
+            order_items = []
+            try:
+                order_items = json.loads(order.items_json) if order.items_json else []
+            except:
+                pass
+            
+            product_names = ", ".join([item.get('name', 'Product') for item in order_items]) or "N/A"
+            
+            # Image links
+            image_links = ""
+            if return_data.images:
+                for i, img in enumerate(return_data.images[:5]):  # Max 5 images
+                    image_links += f"\n📷 [Image {i+1}]({img})"
+            
+            # Reason labels
+            reason_labels = {
+                "defective": "🔴 Product Defective/Damaged",
+                "wrong_item": "🟠 Wrong Item Received",
+                "not_as_expected": "🟡 Product Not As Expected",
+                "size_issue": "🔵 Size/Fit Issue",
+                "quality": "🟣 Quality Not Satisfactory",
+                "changed_mind": "⚪ Customer Changed Mind",
+                "other": "⚫ Other Reason"
+            }
+            
+            reason_text = reason_labels.get(return_data.reason, return_data.reason)
+            
+            message = (
+                f"🔄 *RETURN REQUEST RECEIVED*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"📦 *Order ID:* `{order.order_id}`\n"
+                f"👤 *Customer:* {order.customer_name}\n"
+                f"📍 *Address:* {order.address}, {order.city} - {order.pincode}\n\n"
+                f"🏷️ *Product(s):* {product_names}\n"
+                f"💰 *Order Value:* ₹{order.total_amount}\n\n"
+                f"📋 *Reason:* {reason_text}\n"
+            )
+            
+            if return_data.description:
+                message += f"📝 *Details:* {return_data.description}\n"
+            
+            if image_links:
+                message += f"\n*Product Images:*{image_links}\n"
+            
+            message += f"\n━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += f"💵 *Refund Amount:* ₹{refund_amount}\n\n"
+            
+            # Inline keyboard for approve/reject
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "✅ View in CMS", "url": f"{frontend_url}/admin/returns"}
+                    ]
+                ]
+            }
+            
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            payload = {
+                "chat_id": chat_id,
+                "text": message,
+                "parse_mode": "Markdown",
+                "reply_markup": keyboard,
+                "disable_web_page_preview": False
+            }
+            
+            requests.post(url, json=payload, timeout=10)
+            print(f"Telegram notification sent for return request {new_return.id}")
+    except Exception as e:
+        print(f"Failed to send Telegram notification: {str(e)}")
     
     return {
         "message": "Return request submitted successfully",
