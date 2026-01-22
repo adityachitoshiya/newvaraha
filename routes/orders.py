@@ -316,12 +316,17 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
                 raise HTTPException(status_code=500, detail="PhonePe credentials not configured properly")
             
             # API URLs for v2 Standard Checkout
+            # Reference: https://developer.phonepe.com/docs/pg-checkout-standard/
             if environment == "PRODUCTION":
                 auth_url = "https://api.phonepe.com/apis/identity-manager/v1/oauth/token"
                 pay_url = "https://api.phonepe.com/apis/pg/checkout/v2/pay"
             else:
+                # Sandbox/UAT environment
                 auth_url = "https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token"
                 pay_url = "https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/pay"
+            
+            print(f"DEBUG PhonePe: Environment={environment}, AuthURL={auth_url}")
+            print(f"DEBUG PhonePe: ClientID={client_id[:8]}..., ClientVersion={client_version}")
             
             # Frontend URL for redirect
             frontend_url = os.getenv("FRONTEND_URL", "https://varahajewels.in")
@@ -462,11 +467,10 @@ def phonepe_callback(payload: Dict[str, Any], background_tasks: BackgroundTasks,
 @router.get("/api/phonepe/status/{transaction_id}")
 def check_phonepe_status(transaction_id: str, session: Session = Depends(get_session)):
     """
-    Check PhonePe payment status
+    Check PhonePe payment status using v2 OAuth API
     Called by frontend to verify payment after redirect
     """
     try:
-        import hashlib
         import requests
         
         # Get active PhonePe gateway
@@ -475,49 +479,277 @@ def check_phonepe_status(transaction_id: str, session: Session = Depends(get_ses
             raise HTTPException(status_code=400, detail="PhonePe gateway not configured")
         
         creds = json.loads(gateway.credentials_json)
-        merchant_id = creds.get("merchant_id")
-        salt_key = creds.get("salt_key")
-        salt_index = creds.get("salt_index", "1")
+        
+        # Get v2 OAuth credentials
+        client_id = creds.get("client_id") or creds.get("merchant_id")
+        client_secret = creds.get("client_secret") or creds.get("salt_key")
+        client_version = creds.get("client_version", "1")
         environment = creds.get("environment", "SANDBOX").upper()
         
-        # API URL
+        if not client_id or not client_secret:
+            raise HTTPException(status_code=500, detail="PhonePe credentials not configured properly")
+        
+        # API URLs based on environment
         if environment == "PRODUCTION":
-            api_url = f"https://api.phonepe.com/apis/hermes/pg/v1/status/{merchant_id}/{transaction_id}"
+            auth_url = "https://api.phonepe.com/apis/identity-manager/v1/oauth/token"
+            status_url = f"https://api.phonepe.com/apis/pg/checkout/v2/order/{transaction_id}/status"
         else:
-            api_url = f"https://api-preprod.phonepe.com/apis/pg-sandbox/pg/v1/status/{merchant_id}/{transaction_id}"
+            auth_url = "https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token"
+            status_url = f"https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/order/{transaction_id}/status"
         
-        # Generate checksum
-        checksum_string = f"/pg/v1/status/{merchant_id}/{transaction_id}" + salt_key
-        checksum = hashlib.sha256(checksum_string.encode()).hexdigest() + "###" + salt_index
+        print(f"DEBUG PhonePe Status: Checking order {transaction_id}")
+        print(f"DEBUG PhonePe Status: Environment={environment}, URL={status_url}")
         
-        headers = {
-            "Content-Type": "application/json",
-            "X-VERIFY": checksum,
-            "X-MERCHANT-ID": merchant_id
-        }
+        # Step 1: Get OAuth Access Token
+        auth_response = requests.post(
+            auth_url,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "client_id": client_id,
+                "client_version": client_version,
+                "client_secret": client_secret,
+                "grant_type": "client_credentials"
+            },
+            timeout=30
+        )
         
-        response = requests.get(api_url, headers=headers, timeout=30)
-        response_data = response.json()
+        auth_data = auth_response.json()
+        print(f"DEBUG PhonePe Status Auth: {auth_data}")
         
-        print(f"PhonePe Status Check: {response_data}")
+        if not auth_data.get("access_token"):
+            error_msg = auth_data.get("message") or auth_data.get("error_description") or "Auth failed"
+            return {
+                "success": False,
+                "status": "AUTH_FAILED",
+                "message": f"PhonePe Auth: {error_msg}"
+            }
         
-        if response_data.get("success") and response_data.get("code") == "PAYMENT_SUCCESS":
+        access_token = auth_data["access_token"]
+        
+        # Step 2: Check Order Status
+        status_response = requests.get(
+            status_url,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"O-Bearer {access_token}"
+            },
+            timeout=30
+        )
+        
+        response_data = status_response.json()
+        print(f"DEBUG PhonePe Status Response: {response_data}")
+        
+        # Parse v2 response format
+        state = response_data.get("state", "").upper()
+        
+        if state == "COMPLETED":
             return {
                 "success": True,
                 "status": "SUCCESS",
                 "transactionId": transaction_id,
-                "amount": response_data.get("data", {}).get("amount"),
-                "paymentInstrument": response_data.get("data", {}).get("paymentInstrument", {}).get("type")
+                "amount": response_data.get("amount"),
+                "paymentDetails": response_data.get("paymentDetails", {})
+            }
+        elif state in ["PENDING", "INITIATED"]:
+            return {
+                "success": False,
+                "status": "PENDING",
+                "message": "Payment is being processed"
+            }
+        elif state == "FAILED":
+            return {
+                "success": False,
+                "status": "FAILED",
+                "message": response_data.get("errorMessage") or "Payment failed"
             }
         else:
             return {
                 "success": False,
-                "status": response_data.get("code", "UNKNOWN"),
-                "message": response_data.get("message", "Payment status unknown")
+                "status": response_data.get("state", "UNKNOWN"),
+                "message": response_data.get("errorMessage") or "Payment status unknown"
             }
             
     except Exception as e:
         print(f"PhonePe Status Check Error: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/phonepe/confirm-order")
+def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundTasks, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+    """
+    Confirm PhonePe payment and create order in database
+    Called by frontend after successful payment redirect
+    """
+    try:
+        import requests
+        
+        transaction_id = payload.get("transaction_id") or payload.get("orderId")
+        order_data = payload.get("order_data", {})
+        
+        if not transaction_id:
+            raise HTTPException(status_code=400, detail="Transaction ID required")
+        
+        if not order_data:
+            raise HTTPException(status_code=400, detail="Order data required")
+        
+        # Check if order already exists to prevent duplicates
+        existing_order = session.exec(select(Order).where(Order.order_id == transaction_id)).first()
+        if existing_order:
+            print(f"DEBUG PhonePe: Order {transaction_id} already exists")
+            return {"ok": True, "orderId": existing_order.order_id, "message": "Order already exists"}
+        
+        # Get active PhonePe gateway
+        gateway = session.exec(select(PaymentGateway).where(PaymentGateway.provider == "phonepe")).first()
+        if not gateway:
+            raise HTTPException(status_code=400, detail="PhonePe gateway not configured")
+        
+        creds = json.loads(gateway.credentials_json)
+        client_id = creds.get("client_id") or creds.get("merchant_id")
+        client_secret = creds.get("client_secret") or creds.get("salt_key")
+        client_version = creds.get("client_version", "1")
+        environment = creds.get("environment", "SANDBOX").upper()
+        
+        # API URLs based on environment
+        if environment == "PRODUCTION":
+            auth_url = "https://api.phonepe.com/apis/identity-manager/v1/oauth/token"
+            status_url = f"https://api.phonepe.com/apis/pg/checkout/v2/order/{transaction_id}/status"
+        else:
+            auth_url = "https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token"
+            status_url = f"https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/order/{transaction_id}/status"
+        
+        # Get OAuth Token
+        auth_response = requests.post(
+            auth_url,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "client_id": client_id,
+                "client_version": client_version,
+                "client_secret": client_secret,
+                "grant_type": "client_credentials"
+            },
+            timeout=30
+        )
+        
+        auth_data = auth_response.json()
+        if not auth_data.get("access_token"):
+            raise HTTPException(status_code=400, detail="PhonePe authentication failed")
+        
+        access_token = auth_data["access_token"]
+        
+        # Check Payment Status
+        status_response = requests.get(
+            status_url,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"O-Bearer {access_token}"
+            },
+            timeout=30
+        )
+        
+        response_data = status_response.json()
+        print(f"DEBUG PhonePe Confirm: Status Response = {response_data}")
+        
+        state = response_data.get("state", "").upper()
+        
+        if state != "COMPLETED":
+            return {
+                "ok": False,
+                "status": state,
+                "message": response_data.get("errorMessage") or "Payment not completed"
+            }
+        
+        # Payment is VERIFIED - Now create order
+        print(f"DEBUG PhonePe: Payment verified, creating order {transaction_id}")
+        
+        # Extract user_id from token if available
+        user_id = None
+        try:
+            if token:
+                from supabase_utils import init_supabase
+                s_client = init_supabase()
+                if s_client:
+                    user_data_sb = s_client.auth.get_user(token)
+                    if user_data_sb and user_data_sb.user:
+                        user_id = user_data_sb.user.id
+                        print(f"DEBUG PhonePe: Linked to User UUID: {user_id}")
+        except Exception as e:
+            print(f"DEBUG PhonePe: Token check failed: {e}")
+        
+        # Guest handling
+        if not user_id:
+            existing_cust = session.exec(select(Customer).where(Customer.email == order_data.get('email'))).first()
+            if not existing_cust:
+                new_guest = Customer(
+                    full_name=order_data.get('name'),
+                    email=order_data.get('email'),
+                    provider="guest",
+                    is_active=True
+                )
+                session.add(new_guest)
+                session.commit()
+        
+        # Prepare items
+        items = order_data.get('items', [])
+        if not items and order_data.get('productId'):
+            items = [{
+                "productId": order_data.get('productId'),
+                "productName": "Direct Product",
+                "variantId": order_data.get('variantId'),
+                "quantity": order_data.get('quantity'),
+                "price": order_data.get('amount')
+            }]
+        
+        # Calculate Tax
+        state_input = order_data.get('state', '')
+        tax_data = calculate_tax_breakdown(order_data.get('amount', 0), state_input)
+        
+        # Create Order
+        new_order = Order(
+            order_id=transaction_id,
+            customer_name=order_data.get('name'),
+            email=order_data.get('email'),
+            phone=order_data.get('contact'),
+            address=order_data.get('address'),
+            city=order_data.get('city'),
+            pincode=order_data.get('pincode'),
+            total_amount=order_data.get('amount'),
+            payment_method="online",
+            status="paid",
+            email_status="pending",
+            user_id=uuid.UUID(user_id) if user_id else None,
+            items_json=json.dumps(items),
+            state=state_input,
+            hsn_code=tax_data["hsn_code"],
+            taxable_value=tax_data["taxable_value"],
+            cgst_amount=tax_data["cgst_amount"],
+            sgst_amount=tax_data["sgst_amount"],
+            igst_amount=tax_data["igst_amount"],
+            status_history=json.dumps([{
+                "status": "paid",
+                "timestamp": datetime.utcnow().isoformat(),
+                "comment": f"Payment via PhonePe. TxnID: {transaction_id}"
+            }])
+        )
+        
+        session.add(new_order)
+        session.commit()
+        session.refresh(new_order)
+        
+        # Send notifications
+        background_tasks.add_task(send_order_notifications, new_order.dict())
+        
+        print(f"DEBUG PhonePe: Order {new_order.order_id} created successfully")
+        
+        return {
+            "ok": True,
+            "orderId": new_order.order_id,
+            "amount": new_order.total_amount
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"PhonePe Confirm Order Error: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
