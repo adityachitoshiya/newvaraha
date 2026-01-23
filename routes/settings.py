@@ -49,6 +49,8 @@ def update_store_settings(new_settings: StoreSettings, session: Session = Depend
     settings.ciplx_video_desktop = new_settings.ciplx_video_desktop
     settings.ciplx_video_mobile = new_settings.ciplx_video_mobile
     settings.ciplx_images_json = new_settings.ciplx_images_json
+    settings.ciplx_music_url = new_settings.ciplx_music_url
+    settings.ciplx_music_volume = new_settings.ciplx_music_volume
 
     session.add(settings)
     session.commit()

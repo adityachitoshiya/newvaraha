@@ -159,6 +159,8 @@ class StoreSettings(SQLModel, table=True):
     ciplx_video_desktop: Optional[str] = None
     ciplx_video_mobile: Optional[str] = None
     ciplx_images_json: str = "[]" # JSON string of list of URLs
+    ciplx_music_url: Optional[str] = None # Background music for slideshow
+    ciplx_music_volume: float = 0.4 # Music volume (0.0 to 1.0)
     gstin: Optional[str] = "08CBRPC0024J1ZT" # Updated to real GSTIN
 
 
