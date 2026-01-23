@@ -43,3 +43,31 @@ def upload_video_to_cloudinary(file_content, public_id=None):
     except Exception as e:
         print(f"Cloudinary upload failed: {e}")
         return None
+
+
+def upload_image_to_cloudinary(file_content, folder="returns"):
+    """
+    Uploads an image to Cloudinary.
+    Returns the secure URL of the uploaded image.
+    """
+    try:
+        print(f"Uploading image to Cloudinary (size: {len(file_content)} bytes)...")
+        
+        # Upload options
+        options = {
+            "resource_type": "image",
+            "folder": folder,
+            "transformation": [
+                {"quality": "auto:good", "fetch_format": "auto"}
+            ]
+        }
+        
+        response = cloudinary.uploader.upload(file_content, **options)
+        
+        print(f"Cloudinary image upload success: {response.get('secure_url')}")
+        return response.get('secure_url')
+        
+    except Exception as e:
+        print(f"Cloudinary image upload failed: {e}")
+        return None
+

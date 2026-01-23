@@ -234,3 +234,32 @@ async def otp_health_check():
         "provider": "MSG91"
     }
 
+@router.post("/api/test/send-otp")
+async def test_send_otp(phone: str, template_id: str = None):
+    """
+    Test endpoint to manually send OTP via MSG91 (Server-side trigger)
+    Not used in production Widget flow, but useful for testing credentials.
+    """
+    auth_key = os.getenv("MSG91_AUTH_KEY")
+    if not auth_key:
+        return {"error": "MSG91_AUTH_KEY not set"}
+    
+    # Send OTP URL
+    url = "https://control.msg91.com/api/v5/otp"
+    
+    params = {
+        "mobile": phone,
+        "authkey": auth_key
+    }
+    if template_id:
+        params["template_id"] = template_id
+        
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, params=params)
+            return {
+                "status_code": response.status_code,
+                "msg91_response": response.json()
+            }
+    except Exception as e:
+        return {"error": str(e)}

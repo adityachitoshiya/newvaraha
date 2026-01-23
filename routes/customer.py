@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlmodel import Session, select
 from typing import List, Dict
 from datetime import datetime
@@ -7,8 +7,40 @@ from datetime import datetime
 from database import get_session
 from models import Address, Wishlist, Product, Customer, OrderReturn
 from dependencies import get_current_user
+from cloudinary_utils import upload_image_to_cloudinary
 
 router = APIRouter()
+
+
+# --- Image Upload for Returns ---
+
+@router.post("/api/customer/upload-image")
+async def upload_return_image(
+    file: UploadFile = File(...),
+    current_user: Customer = Depends(get_current_user)
+):
+    """Upload and compress image for return request"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Validate file type
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Only image files are allowed")
+    
+    # Read file content
+    content = await file.read()
+    
+    # Max size 5MB
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image too large. Max 5MB allowed.")
+    
+    # Upload to Cloudinary
+    url = upload_image_to_cloudinary(content, folder="returns")
+    
+    if not url:
+        raise HTTPException(status_code=500, detail="Failed to upload image")
+    
+    return {"url": url, "filename": file.filename}
 
 # --- Wishlist ---
 
