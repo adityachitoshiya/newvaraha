@@ -45,29 +45,63 @@ def upload_video_to_cloudinary(file_content, public_id=None):
         return None
 
 
+from io import BytesIO
+from PIL import Image
+
 def upload_image_to_cloudinary(file_content, folder="returns"):
     """
-    Uploads an image to Cloudinary.
+    Uploads an image to Cloudinary after compressing to WebP.
     Returns the secure URL of the uploaded image.
     """
     try:
-        print(f"Uploading image to Cloudinary (size: {len(file_content)} bytes)...")
+        # Compress to WebP first
+        img = Image.open(BytesIO(file_content))
         
-        # Upload options
+        # Convert mode if needed
+        if img.mode in ('RGBA', 'LA', 'P'):
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Resize if too large (max 1920px)
+        width, height = img.size
+        max_size = 1920
+        if width > max_size or height > max_size:
+            ratio = min(max_size / width, max_size / height)
+            new_size = (int(width * ratio), int(height * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+        
+        # Convert to WebP
+        output = BytesIO()
+        if img.mode == 'RGBA':
+            img.save(output, format='WEBP', quality=85, lossless=False)
+        else:
+            img.save(output, format='WEBP', quality=85)
+        
+        compressed_content = output.getvalue()
+        
+        print(f"Image compressed: {len(file_content)} bytes -> {len(compressed_content)} bytes (WebP)")
+        print(f"Uploading WebP image to Cloudinary (size: {len(compressed_content)} bytes)...")
+        
+        # Upload options with WebP format
         options = {
             "resource_type": "image",
             "folder": folder,
+            "format": "webp",  # Force WebP format
             "transformation": [
-                {"quality": "auto:good", "fetch_format": "auto"}
+                {"quality": "auto:good", "fetch_format": "webp"}
             ]
         }
         
-        response = cloudinary.uploader.upload(file_content, **options)
+        response = cloudinary.uploader.upload(compressed_content, **options)
         
         print(f"Cloudinary image upload success: {response.get('secure_url')}")
         return response.get('secure_url')
         
     except Exception as e:
         print(f"Cloudinary image upload failed: {e}")
+        import traceback
+        print(traceback.format_exc())
         return None
 

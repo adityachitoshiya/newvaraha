@@ -158,6 +158,7 @@ class StoreSettings(SQLModel, table=True):
     heritage_video_mobile: Optional[str] = None
     ciplx_video_desktop: Optional[str] = None
     ciplx_video_mobile: Optional[str] = None
+    ciplx_images_json: str = "[]" # JSON string of list of URLs
     gstin: Optional[str] = "08CBRPC0024J1ZT" # Updated to real GSTIN
 
 
