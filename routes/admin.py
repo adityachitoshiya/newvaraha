@@ -12,18 +12,21 @@ from supabase_utils import upload_file_to_supabase
 
 router = APIRouter()
 
-from cloudinary_utils import upload_video_to_cloudinary, upload_image_to_cloudinary
+from cloudinary_utils import upload_video_to_cloudinary, upload_image_to_cloudinary, upload_audio_to_cloudinary
 
 @router.post("/api/upload")
 async def upload_file(
     file: UploadFile = File(...), 
     current_user: AdminUser = Depends(get_current_admin)
 ):
-    # Route based on content type - USE CLOUDINARY for both images and videos
+    # Route based on content type - USE CLOUDINARY for images, videos, and audio
     file_content = await file.read()
     
     if file.content_type and "video" in file.content_type:
         url = upload_video_to_cloudinary(file_content)
+    elif file.content_type and "audio" in file.content_type:
+        # Upload audio files (music)
+        url = upload_audio_to_cloudinary(file_content)
     else:
         # Upload images to Cloudinary with WebP compression
         url = upload_image_to_cloudinary(file_content, folder="ciplx_images")

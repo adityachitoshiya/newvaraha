@@ -105,3 +105,28 @@ def upload_image_to_cloudinary(file_content, folder="returns"):
         print(traceback.format_exc())
         return None
 
+
+def upload_audio_to_cloudinary(file_content, folder="ciplx_music"):
+    """
+    Uploads audio to Cloudinary.
+    Returns the secure URL of the uploaded audio.
+    """
+    try:
+        print(f"Uploading audio to Cloudinary (size: {len(file_content)} bytes)...")
+        
+        # Upload options
+        options = {
+            "resource_type": "video",  # Cloudinary uses "video" type for audio
+            "folder": folder,
+        }
+        
+        response = cloudinary.uploader.upload(file_content, **options)
+        
+        print(f"Cloudinary audio upload success: {response.get('secure_url')}")
+        return response.get('secure_url')
+        
+    except Exception as e:
+        print(f"Cloudinary audio upload failed: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return None
