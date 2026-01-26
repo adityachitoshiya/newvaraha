@@ -284,3 +284,11 @@ class BlockedRegion(SQLModel, table=True):
     is_blocked: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+
+class VerificationCode(SQLModel, table=True):
+    """Store generated OTPs for custom verification flow"""
+    phone: str = Field(primary_key=True)
+    code: str
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    attempts: int = 0
