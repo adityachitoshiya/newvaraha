@@ -3,7 +3,7 @@ MSG91 OTP Verification Routes
 Handles OTP verification via MSG91 Widget
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 import httpx
 import os
