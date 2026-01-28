@@ -190,7 +190,7 @@ async def verify_guest_and_create_account(request: GuestVerifyRequest):
             })
             
             if signup_response.user:
-                print(f"DEBUG: Created new user account for {request.email}")
+                # print(f"DEBUG: Created new user account for [MASKED]")
                 
                 # Auto-login the user
                 login_response = supabase.auth.sign_in_with_password({
@@ -332,7 +332,7 @@ async def send_custom_otp(request: CustomOTPRequest, session: Session = Depends(
     
     auth_key = get_next_otp_api_key(session)
     if not auth_key:
-        print(f"DEBUG: Mocking OTP for {phone}: {otp_code}")
+        # print(f"DEBUG: Mocking OTP for [MASKED]: [MASKED]")
         return {"success": True, "message": "OTP sent (Mock)", "debug_otp": otp_code} # Remove debug_otp in prod
 
     # MSG91 OTP Send API

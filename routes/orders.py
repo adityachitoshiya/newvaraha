@@ -852,7 +852,7 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
                 )
                 session.add(new_guest)
                 session.commit()
-                print(f"DEBUG: Created Guest Customer for email: {order_data.get('email')}")
+                # print(f"DEBUG: Created Guest Customer for email: [MASKED]")
             # NOTE: Do NOT set user_id from email match - this is a guest order
             # Order will have user_id=None which is correct for guest checkout
             print(f"DEBUG: Guest Order - user_id will be None")
