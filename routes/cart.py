@@ -91,10 +91,19 @@ def add_to_cart(item_in: CartItemCreate, user: Customer = Depends(get_current_us
         session.commit()
         session.refresh(cart)
         
+    # Sanitize product_id: If it looks like a SKU (ends with -default), strip it
+    real_product_id = item_in.product_id
+    if "-default" in real_product_id and not session.get(Product, real_product_id):
+        # Try to recover the real product ID
+        potential_id = real_product_id.split("-default")[0]
+        if session.get(Product, potential_id):
+            real_product_id = potential_id
+            # Also update item_in for consistency if needed, but we use real_product_id below
+    
     # Check duplicate
     existing = session.exec(select(CartItem).where(
         CartItem.cart_id == cart.id,
-        CartItem.product_id == item_in.product_id,
+        CartItem.product_id == real_product_id,
         CartItem.variant_sku == item_in.variant_sku
     )).first()
     
@@ -104,7 +113,7 @@ def add_to_cart(item_in: CartItemCreate, user: Customer = Depends(get_current_us
     else:
         new_item = CartItem(
             cart_id=cart.id,
-            product_id=item_in.product_id, # Ensure this matches Product.id (string)
+            product_id=real_product_id, # Ensure this matches Product.id (string)
             quantity=item_in.quantity,
             variant_sku=item_in.variant_sku
         )
