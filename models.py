@@ -8,6 +8,7 @@ class ProductBase(SQLModel):
     name: str = Field(index=True)
     description: Optional[str] = None
     price: Optional[float] = None
+    stock: int = 0  # Available stock quantity
     category: Optional[str] = Field(default=None, index=True)
     metal: Optional[str] = None
     carat: Optional[str] = None

@@ -27,13 +27,16 @@ class RapidShypClient:
             if method == "POST":
                 logger.info(f"Sending POST request to {url}")
                 # logger.info(f"Payload: {json.dumps(payload, indent=2)}") # Debug only
-                response = requests.post(url, json=payload, headers=self._get_headers())
+                response = requests.post(url, json=payload, headers=self._get_headers(), timeout=15)
             else:
                 logger.info(f"Sending GET request to {url}")
-                response = requests.get(url, params=params, headers=self._get_headers())
+                response = requests.get(url, params=params, headers=self._get_headers(), timeout=15)
             
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.Timeout:
+            logger.error(f"RapidShyp API Timeout: Request to {url} exceeded 15 seconds")
+            return {"status": "error", "error": "Request timeout - RapidShyp API is taking too long"}
         except requests.exceptions.RequestException as e:
             logger.error(f"RapidShyp API Request Error: {e}")
             if hasattr(e, 'response') and e.response is not None:
