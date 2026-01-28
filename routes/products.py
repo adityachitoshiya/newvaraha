@@ -172,14 +172,20 @@ def create_review(review_data: ReviewCreate, session: Session = Depends(get_sess
 
 @router.get("/api/reviews/{product_id}")
 def get_reviews(product_id: str, session: Session = Depends(get_session)):
-    reviews = session.exec(select(Review).where(Review.product_id == product_id)).all()
-    # Parse media_urls back to list
-    return [
-        {
-            **review.dict(), 
-            "media_urls": json.loads(review.media_urls)
-        } for review in reviews
-    ]
+    try:
+        reviews = session.exec(select(Review).where(Review.product_id == product_id)).all()
+        # Parse media_urls back to list
+        result = []
+        for review in reviews:
+            review_data = review.model_dump() if hasattr(review, 'model_dump') else review.dict()
+            review_data["media_urls"] = json.loads(review.media_urls) if review.media_urls else []
+            result.append(review_data)
+        return result
+    except Exception as e:
+        print(f"Error fetching reviews: {e}")
+        traceback.print_exc()
+        # Return empty list instead of crashing
+        return []
 
 @router.delete("/api/reviews/{review_id}")
 def delete_review(review_id: int, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
