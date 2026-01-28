@@ -76,7 +76,31 @@ def update_gateway(gateway_id: int, gateway_in: GatewayUpdate, token: str = Depe
             session.add(g)
             
     gateway.is_active = gateway_in.is_active
-    gateway.credentials_json = json.dumps(gateway_in.credentials)
+    
+    # Only update credentials if they don't contain masked values
+    # This prevents credential corruption when just toggling active status
+    incoming_creds = gateway_in.credentials
+    existing_creds = json.loads(gateway.credentials_json) if gateway.credentials_json else {}
+    
+    has_masked_values = any(
+        isinstance(v, str) and '********' in v 
+        for v in incoming_creds.values()
+    )
+    
+    if not has_masked_values:
+        # All credentials are real, update them
+        gateway.credentials_json = json.dumps(incoming_creds)
+    else:
+        # Some credentials are masked - merge: keep existing for masked, update non-masked
+        merged_creds = existing_creds.copy()
+        for key, value in incoming_creds.items():
+            if isinstance(value, str) and '********' in value:
+                # Keep existing credential for masked values
+                pass
+            else:
+                # Update with new value
+                merged_creds[key] = value
+        gateway.credentials_json = json.dumps(merged_creds)
     
     session.add(gateway)
     session.commit()
