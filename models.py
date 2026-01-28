@@ -163,6 +163,12 @@ class StoreSettings(SQLModel, table=True):
     ciplx_music_url: Optional[str] = None # Background music for slideshow
     ciplx_music_volume: float = 0.4 # Music volume (0.0 to 1.0)
     gstin: Optional[str] = "08CBRPC0024J1ZT" # Updated to real GSTIN
+    
+    # Dynamic Product Offers (Admin-controlled)
+    mega_deal_enabled: bool = True
+    mega_deal_discount_percent: int = 10
+    mega_deal_label: str = "MEGA DEAL"
+    bank_offers_json: str = '[{"title":"10% Instant Discount on Axis Bank Cards","subtitle":"Min Spend ₹3,500, Max Discount ₹500"},{"title":"5% Unlimited Cashback on Credit Cards","subtitle":""},{"title":"EMI option available","subtitle":"EMI starting from ₹500/month"}]'
 
 
 
