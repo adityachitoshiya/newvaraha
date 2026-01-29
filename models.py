@@ -169,6 +169,11 @@ class StoreSettings(SQLModel, table=True):
     mega_deal_discount_percent: int = 10
     mega_deal_label: str = "MEGA DEAL"
     bank_offers_json: str = '[{"title":"10% Instant Discount on Axis Bank Cards","subtitle":"Min Spend ₹3,500, Max Discount ₹500"},{"title":"5% Unlimited Cashback on Credit Cards","subtitle":""},{"title":"EMI option available","subtitle":"EMI starting from ₹500/month"}]'
+    
+    # Prepaid Payment Discount (Admin-controlled)
+    prepaid_discount_enabled: bool = True
+    prepaid_discount_percent: int = 5
+
 
 
 

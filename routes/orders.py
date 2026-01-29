@@ -139,6 +139,38 @@ def calculate_tax_breakdown(total_amount: float, state: str):
         
     return breakdown
 
+def calculate_prepaid_discount(base_amount: float, payment_method: str, session: Session) -> float:
+    """
+    Calculate prepaid payment discount.
+    Returns discount amount if payment_method is 'online'/'prepaid' and discount is enabled.
+    Returns 0 for COD orders.
+    """
+    # Only apply discount for prepaid/online payments
+    if payment_method.lower() not in ['online', 'prepaid']:
+        return 0.0
+    
+    # Fetch prepaid discount settings
+    try:
+        settings = session.get(StoreSettings, 1)
+        if not settings:
+            return 0.0
+        
+        # Check if prepaid discount is enabled
+        if not settings.prepaid_discount_enabled:
+            return 0.0
+        
+        # Calculate discount
+        discount_percent = settings.prepaid_discount_percent or 0
+        discount_amount = round((base_amount * discount_percent) / 100, 2)
+        
+        print(f"DEBUG Prepaid Discount: {discount_percent}% of ₹{base_amount} = ₹{discount_amount}")
+        return discount_amount
+        
+    except Exception as e:
+        print(f"ERROR calculating prepaid discount: {e}")
+        return 0.0
+
+
 # --- Routes ---
 
 @router.post("/api/create-cod-order")
@@ -703,6 +735,10 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
         state_input = order_data.get('state', '')
         tax_data = calculate_tax_breakdown(order_data.get('amount', 0), state_input)
         
+        # Calculate Prepaid Discount (if enabled)
+        prepaid_discount = calculate_prepaid_discount(order_data.get('amount', 0), 'online', session)
+        final_amount = order_data.get('amount', 0) - prepaid_discount
+        
         # Create Order
         new_order = Order(
             order_id=transaction_id,
@@ -712,7 +748,7 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
             address=order_data.get('address'),
             city=order_data.get('city'),
             pincode=order_data.get('pincode'),
-            total_amount=order_data.get('amount'),
+            total_amount=final_amount,  # Apply discount
             payment_method="online",
             status="paid",
             email_status="pending",
@@ -727,7 +763,7 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
             status_history=json.dumps([{
                 "status": "paid",
                 "timestamp": datetime.utcnow().isoformat(),
-                "comment": f"Payment via PhonePe. TxnID: {transaction_id}"
+                "comment": f"Payment via PhonePe. TxnID: {transaction_id}" + (f" | Prepaid Discount: ₹{prepaid_discount}" if prepaid_discount > 0 else "")
             }])
         )
         
@@ -862,6 +898,10 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
         # If state not in order_data, try to extract from address? No, assume frontend sends it.
         # Fallback to empty string which defaults to IGST
         tax_data = calculate_tax_breakdown(order_data.get('amount'), state_input)
+        
+        # Calculate Prepaid Discount (if enabled)
+        prepaid_discount = calculate_prepaid_discount(order_data.get('amount'), 'online', session)
+        final_amount = order_data.get('amount') - prepaid_discount
 
         new_order = Order(
             order_id=f"ORD-{razorpay_order_id}" if razorpay_order_id else f"ORD-{int(time.time())}",
@@ -871,7 +911,7 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
             address=order_data.get('address'),
             city=order_data.get('city'),
             pincode=order_data.get('pincode'),
-            total_amount=order_data.get('amount'),
+            total_amount=final_amount,  # Apply discount
             payment_method="online",
             status="paid",
             email_status="pending", # Explicitly set default
@@ -889,7 +929,7 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
             status_history=json.dumps([{
                 "status": "paid",
                 "timestamp": datetime.utcnow().isoformat(),
-                "comment": f"Payment Successful. Ref: {razorpay_payment_id}"
+                "comment": f"Payment Successful. Ref: {razorpay_payment_id}" + (f" | Prepaid Discount: ₹{prepaid_discount}" if prepaid_discount > 0 else "")
             }])
         )
         
