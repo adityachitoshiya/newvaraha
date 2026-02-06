@@ -46,22 +46,30 @@ def manual_migration(current_user: AdminUser = Depends(get_current_admin)):
     try:
         from migration_add_gender_collection import run_migration as run_gender_migration
         from migrate_categories import create_category_table
+        from migrate_wishlist_schema import run_migration as run_wishlist_migration
         
         print("🔧 Triggering Manual Migrations...")
         
-        # 1. Product Gender Columns
+        # 1. Product Gender/Type Columns
         try:
             run_gender_migration()
-            results.append("Product Gender Migration: Success")
+            results.append("Product Schema (Gender/Type): Success")
         except Exception as e:
-            results.append(f"Product Gender Migration Failed: {str(e)}")
+            results.append(f"Product Schema Failed: {str(e)}")
             
         # 2. Categories Table
         try:
             create_category_table()
-            results.append("Category Table Migration: Success")
+            results.append("Category Table: Success")
         except Exception as e:
-             results.append(f"Category Migration Failed: {str(e)}")
+             results.append(f"Category Table Failed: {str(e)}")
+
+        # 3. Wishlist Schema
+        try:
+            run_wishlist_migration()
+            results.append("Wishlist Schema: Success")
+        except Exception as e:
+            results.append(f"Wishlist Schema Failed: {str(e)}")
              
         return {"ok": True, "results": results}
         
