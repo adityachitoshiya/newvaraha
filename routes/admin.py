@@ -36,6 +36,38 @@ async def upload_file(
     
     return {"url": url}
 
+@router.post("/api/admin/migrate/manual")
+def manual_migration(current_user: AdminUser = Depends(get_current_admin)):
+    """
+    Manually trigger schema migrations. 
+    Useful if startup hooks failed or for production hot-fixing.
+    """
+    results = []
+    try:
+        from migration_add_gender_collection import run_migration as run_gender_migration
+        from migrate_categories import create_category_table
+        
+        print("🔧 Triggering Manual Migrations...")
+        
+        # 1. Product Gender Columns
+        try:
+            run_gender_migration()
+            results.append("Product Gender Migration: Success")
+        except Exception as e:
+            results.append(f"Product Gender Migration Failed: {str(e)}")
+            
+        # 2. Categories Table
+        try:
+            create_category_table()
+            results.append("Category Table Migration: Success")
+        except Exception as e:
+             results.append(f"Category Migration Failed: {str(e)}")
+             
+        return {"ok": True, "results": results}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- Hero Slides ---
 
 @router.post("/api/content/hero")
