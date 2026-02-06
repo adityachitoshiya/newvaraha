@@ -6,8 +6,8 @@ import uuid
 import logging
 
 from database import get_session
-from models import Wishlist, Product
-from auth_middleware import get_current_user_token
+from models import Wishlist, Product, Customer
+from dependencies import get_current_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -23,13 +23,12 @@ class SyncRequest(BaseModel):
 
 @router.get("/api/wishlist", response_model=List[str])
 async def get_wishlist(
-    user_token: dict = Depends(get_current_user_token),
+    current_user: Customer = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     try:
-        user_id = uuid.UUID(user_token["sub"]) # Validates User ID from token
-        
-        statement = select(Wishlist.product_id).where(Wishlist.user_id == user_id)
+        # User is already validated by get_current_user dependency
+        statement = select(Wishlist.product_id).where(Wishlist.customer_id == current_user.id)
         results = session.exec(statement).all()
         
         return results
@@ -40,15 +39,13 @@ async def get_wishlist(
 @router.post("/api/wishlist")
 async def add_to_wishlist(
     item: WishlistItem,
-    user_token: dict = Depends(get_current_user_token),
+    current_user: Customer = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     try:
-        user_id = uuid.UUID(user_token["sub"])
-        
         # Check if already exists
         statement = select(Wishlist).where(
-            Wishlist.user_id == user_id, 
+            Wishlist.customer_id == current_user.id, 
             Wishlist.product_id == item.product_id
         )
         existing = session.exec(statement).first()
@@ -58,7 +55,7 @@ async def add_to_wishlist(
             
         # Add new item
         new_item = Wishlist(
-            user_id=user_id,
+            customer_id=current_user.id,
             product_id=item.product_id
         )
         session.add(new_item)
@@ -72,14 +69,12 @@ async def add_to_wishlist(
 @router.delete("/api/wishlist/{product_id}")
 async def remove_from_wishlist(
     product_id: str,
-    user_token: dict = Depends(get_current_user_token),
+    current_user: Customer = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     try:
-        user_id = uuid.UUID(user_token["sub"])
-        
         statement = select(Wishlist).where(
-            Wishlist.user_id == user_id, 
+            Wishlist.customer_id == current_user.id, 
             Wishlist.product_id == product_id
         )
         item = session.exec(statement).first()
@@ -97,7 +92,7 @@ async def remove_from_wishlist(
 @router.post("/api/wishlist/sync")
 async def sync_wishlist(
     sync_data: SyncRequest,
-    user_token: dict = Depends(get_current_user_token),
+    current_user: Customer = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     """
@@ -105,15 +100,13 @@ async def sync_wishlist(
     Does NOT delete items from server, only adds missing ones.
     """
     try:
-        user_id = uuid.UUID(user_token["sub"])
-        
         added_count = 0
-        current_ids = session.exec(select(Wishlist.product_id).where(Wishlist.user_id == user_id)).all()
+        current_ids = session.exec(select(Wishlist.product_id).where(Wishlist.customer_id == current_user.id)).all()
         current_ids_set = set(current_ids)
         
         for item in sync_data.items:
             if item.product_id not in current_ids_set:
-                new_item = Wishlist(user_id=user_id, product_id=item.product_id)
+                new_item = Wishlist(customer_id=current_user.id, product_id=item.product_id)
                 session.add(new_item)
                 added_count += 1
                 
@@ -121,7 +114,7 @@ async def sync_wishlist(
             session.commit()
             
         # Return updated full list
-        updated_list = session.exec(select(Wishlist.product_id).where(Wishlist.user_id == user_id)).all()
+        updated_list = session.exec(select(Wishlist.product_id).where(Wishlist.customer_id == current_user.id)).all()
         return updated_list
         
     except Exception as e:
