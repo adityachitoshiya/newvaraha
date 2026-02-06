@@ -66,6 +66,18 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
+    
+    # Run Migrations
+    try:
+        from migration_add_gender_collection import run_migration as run_gender_migration
+        from migrate_categories import create_category_table
+        
+        print("🚀 Running Startup Migrations...")
+        run_gender_migration()
+        create_category_table()
+        print("✅ Startup Migrations Completed")
+    except Exception as e:
+        logger.error(f"Startup Migration Failed: {e}")
 
 # Include Routers
 # Web Router handles "/" and docs login
