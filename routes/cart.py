@@ -66,8 +66,10 @@ def sync_cart(sync_data: CartSync, user: Customer = Depends(get_current_user), s
     for local_item in sync_data.local_items:
         key = (local_item.product_id, local_item.variant_sku)
         if key in existing_map:
-            # Optional: Update quantity
-            pass 
+            # Merge Strategy: Sum quantities (or keep max? summed is safer for guest->user transition)
+            existing_item = existing_map[key]
+            existing_item.quantity += local_item.quantity
+            session.add(existing_item)
         else:
             # Add new item
             new_item = CartItem(
