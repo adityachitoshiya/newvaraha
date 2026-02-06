@@ -36,6 +36,8 @@ def get_cart(user: Customer = Depends(get_current_user), session: Session = Depe
     for item in items:
         product = session.get(Product, item.product_id)
         if product:
+            # Ensure price is never None/null - use 0 as fallback
+            price = product.price if product.price is not None else 0
             result.append({
                 "id": item.id,
                 "productId": item.product_id,
@@ -44,7 +46,7 @@ def get_cart(user: Customer = Depends(get_current_user), session: Session = Depe
                 "variant": {
                     "sku": item.variant_sku or f"{product.id}-default",
                     "name": "Standard", # Placeholder
-                    "price": product.price,
+                    "price": price,
                     "image": product.image
                 }
             })
