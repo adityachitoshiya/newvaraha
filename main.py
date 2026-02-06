@@ -9,7 +9,7 @@ from database import create_db_and_tables
 
 from middleware import MonitoringMiddleware
 # Import Routers
-from routes import auth, products, orders, cart, gateways, admin, settings, customer, coupons, analytics, web, health, dashboard, notifications, reports, tracking, otp
+from routes import auth, customer, products, cart, orders, gateways, admin, settings, coupons, analytics, health, dashboard, notifications, reports, tracking, otp, web, categories, wishlist
 
 import logging
 from monitoring import monitor
@@ -38,6 +38,8 @@ origins = [
     # Development
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
     "http://localhost:8000",
     
     # Production
@@ -85,3 +87,5 @@ app.include_router(notifications.router, tags=["Notifications"])
 app.include_router(reports.router, tags=["Reports"])
 app.include_router(tracking.router, tags=["Tracking"])
 app.include_router(otp.router, tags=["OTP"])
+app.include_router(categories.router, tags=["Categories"])
+app.include_router(wishlist.router, tags=["Wishlist"])

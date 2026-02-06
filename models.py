@@ -4,6 +4,18 @@ from sqlmodel import Field, SQLModel
 from datetime import datetime
 import json
 
+class CategoryBase(SQLModel):
+    name: str = Field(index=True, unique=True)
+    display_name: str  # Display name (can be in Hindi/English)
+    gender: Optional[str] = Field(default=None, index=True)  # "Men", "Women", or None for both
+    description: Optional[str] = None
+    is_active: bool = True
+    sort_order: int = 0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class Category(CategoryBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
 class ProductBase(SQLModel):
     name: str = Field(index=True)
     description: Optional[str] = None
@@ -22,6 +34,10 @@ class ProductBase(SQLModel):
     average_rating: Optional[float] = None  # Calculated average rating
     total_reviews: int = 0  # Total number of reviews
     rating_distribution: str = "{}"  # JSON: {"5": 10, "4": 5, "3": 2, "2": 1, "1": 0}
+    # Gender-based navigation fields
+    gender: Optional[str] = Field(default=None, index=True)  # "Men", "Women", or None
+    collection: Optional[str] = Field(default=None, index=True)  # "Bridal", "Minimal", etc.
+    product_type: Optional[str] = Field(default=None, index=True)  # Product type classification
 
 class Product(ProductBase, table=True):
     id: Optional[str] = Field(default=None, primary_key=True)
@@ -82,6 +98,15 @@ class Notification(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     message: str
     is_read: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    user_id: Optional[uuid.UUID] = Field(default=None, index=True)
+
+class Wishlist(SQLModel, table=True):
+    __table_args__ = {'extend_existing': True}
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: uuid.UUID = Field(index=True)
+    product_id: str = Field(index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
     order_id: Optional[str] = None # Link to order
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
