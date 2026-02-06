@@ -35,7 +35,7 @@ def run_migration():
                 SELECT column_name 
                 FROM information_schema.columns 
                 WHERE table_name = 'product' 
-                AND column_name IN ('gender', 'collection')
+                AND column_name IN ('gender', 'collection', 'product_type')
             """))
             existing_columns = [row[0] for row in result.fetchall()]
             
@@ -66,6 +66,20 @@ def run_migration():
                 print("✅ 'collection' column added successfully")
             else:
                 print("ℹ️ 'collection' column already exists")
+            
+            # Add product_type column if not exists
+            if 'product_type' not in existing_columns:
+                print("🔄 Adding 'product_type' column...")
+                conn.execute(text("""
+                    ALTER TABLE product 
+                    ADD COLUMN product_type VARCHAR(50) DEFAULT NULL
+                """))
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS ix_product_product_type ON product(product_type)
+                """))
+                print("✅ 'product_type' column added successfully")
+            else:
+                print("ℹ️ 'product_type' column already exists")
             
             conn.commit()
             print("\n🎉 Migration completed successfully!")
