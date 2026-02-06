@@ -38,11 +38,13 @@ def get_cart(user: Customer = Depends(get_current_user), session: Session = Depe
         if product:
             # Ensure price is never None/null - use 0 as fallback
             price = product.price if product.price is not None else 0
+            stock = product.stock if product.stock is not None else 0
             result.append({
                 "id": item.id,
                 "productId": item.product_id,
                 "productName": product.name,
                 "quantity": item.quantity,
+                "stock": stock,  # Include stock for frontend validation
                 "variant": {
                     "sku": item.variant_sku or f"{product.id}-default",
                     "name": "Standard", # Placeholder
