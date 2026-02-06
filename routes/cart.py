@@ -102,6 +102,14 @@ def add_to_cart(item_in: CartItemCreate, user: Customer = Depends(get_current_us
             real_product_id = potential_id
             # Also update item_in for consistency if needed, but we use real_product_id below
     
+    # Validation: Check Stock
+    product = session.get(Product, real_product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+        
+    if product.stock is not None and product.stock <= 0:
+        raise HTTPException(status_code=400, detail="Product is out of stock")
+    
     # Check duplicate
     existing = session.exec(select(CartItem).where(
         CartItem.cart_id == cart.id,
