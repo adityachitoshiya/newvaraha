@@ -13,4 +13,5 @@ class CategoryBase(SQLModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class Category(CategoryBase, table=True):
+    __table_args__ = {'extend_existing': True}
     id: Optional[int] = Field(default=None, primary_key=True)
