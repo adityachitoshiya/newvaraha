@@ -171,6 +171,30 @@ def calculate_prepaid_discount(base_amount: float, payment_method: str, session:
         return 0.0
 
 
+def deduct_stock_for_items(items: list, session: Session):
+    """
+    Deduct stock for each item in the order.
+    items: List of dicts with 'productId' and 'quantity' keys.
+    Should be called AFTER order is successfully created.
+    """
+    from models import Product
+    
+    for item in items:
+        product_id = item.get("productId")
+        quantity = item.get("quantity", 1)
+        
+        if not product_id:
+            continue
+            
+        product = session.get(Product, product_id)
+        if product and product.stock is not None:
+            product.stock = max(0, product.stock - quantity)
+            session.add(product)
+            print(f"📦 Stock Update: {product_id} -> {product.stock} (deducted {quantity})")
+    
+    session.commit()
+
+
 # --- Routes ---
 
 @router.post("/api/create-cod-order")
@@ -263,6 +287,9 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
     session.add(new_order)
     session.commit()
     session.refresh(new_order)
+    
+    # Deduct Stock for ordered items
+    deduct_stock_for_items(items_list, session)
     
     # Notify
     background_tasks.add_task(send_order_notifications, new_order.dict())
@@ -770,6 +797,9 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
         session.add(new_order)
         session.commit()
         session.refresh(new_order)
+        
+        # Deduct Stock for ordered items
+        deduct_stock_for_items(items, session)
         
         # Send notifications
         background_tasks.add_task(send_order_notifications, new_order.dict())

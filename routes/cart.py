@@ -110,6 +110,13 @@ def add_to_cart(item_in: CartItemCreate, user: Customer = Depends(get_current_us
     if product.stock is not None and product.stock <= 0:
         raise HTTPException(status_code=400, detail="Product is out of stock")
     
+    # Check if requested quantity exceeds available stock
+    if product.stock is not None and item_in.quantity > product.stock:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Only {product.stock} units available in stock"
+        )
+    
     # Check duplicate
     existing = session.exec(select(CartItem).where(
         CartItem.cart_id == cart.id,
