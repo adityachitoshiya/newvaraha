@@ -20,8 +20,13 @@ def run_migration():
         print("❌ DATABASE_URL not found in environment variables")
         return False
     
+    # Fix for SQLAlchemy (Postgres requires postgresql://)
+    db_url = DATABASE_URL
+    if db_url and db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    
     # Create engine
-    engine = create_engine(DATABASE_URL, echo=True)
+    engine = create_engine(db_url, echo=True)
     
     with engine.connect() as conn:
         try:

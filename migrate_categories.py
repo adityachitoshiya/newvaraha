@@ -22,7 +22,12 @@ def create_category_table():
         print("❌ DATABASE_URL not found in environment")
         return
     
-    engine = create_engine(DATABASE_URL)
+    # Fix for SQLAlchemy
+    db_url = DATABASE_URL
+    if db_url and db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    
+    engine = create_engine(db_url)
     
     try:
         # Create all tables (will only create if not exists)
