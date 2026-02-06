@@ -223,6 +223,7 @@ class CartItem(SQLModel, table=True):
 
 # Wishlist Model
 class Wishlist(SQLModel, table=True):
+    __table_args__ = {'extend_existing': True}
     id: Optional[int] = Field(default=None, primary_key=True)
     customer_id: int = Field(foreign_key="customer.id", index=True)
     product_id: str = Field(foreign_key="product.id", index=True)
