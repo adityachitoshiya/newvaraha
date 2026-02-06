@@ -101,14 +101,7 @@ class Notification(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     user_id: Optional[uuid.UUID] = Field(default=None, index=True)
 
-class Wishlist(SQLModel, table=True):
-    __table_args__ = {'extend_existing': True}
-    id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: uuid.UUID = Field(index=True)
-    product_id: str = Field(index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    order_id: Optional[str] = None # Link to order
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+
 
 class Customer(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
