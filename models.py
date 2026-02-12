@@ -38,6 +38,7 @@ class ProductBase(SQLModel):
     gender: Optional[str] = Field(default=None, index=True)  # "Men", "Women", or None
     collection: Optional[str] = Field(default=None, index=True)  # "Bridal", "Minimal", etc.
     product_type: Optional[str] = Field(default=None, index=True)  # Product type classification
+    colour: Optional[str] = None  # Product colour (e.g., Gold, Silver, Rose Gold)
 
 class Product(ProductBase, table=True):
     id: Optional[str] = Field(default=None, primary_key=True)
@@ -167,6 +168,10 @@ class StoreSettings(SQLModel, table=True):
     announcement_text: str = "Grand Launch In:"
     announcement_date: str = "2026-02-12T00:00:00"
     show_announcement: bool = True
+    
+    # Dynamic Announcement Bar (replaces old single-text announcement)
+    # JSON array: [{"type":"offer|announcement|coupon","text":"...","active":true}, ...]
+    announcement_bar_json: str = '[]'
     delivery_free_threshold: float = 1000.0
     logo_url: str = "/varaha-assets/logo.png"
     show_full_page_countdown: bool = True

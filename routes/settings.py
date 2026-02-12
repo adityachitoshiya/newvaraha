@@ -38,6 +38,7 @@ def update_store_settings(new_settings: StoreSettings, session: Session = Depend
     settings.announcement_text = new_settings.announcement_text
     settings.announcement_date = new_settings.announcement_date
     settings.show_announcement = new_settings.show_announcement
+    settings.announcement_bar_json = new_settings.announcement_bar_json
     settings.delivery_free_threshold = new_settings.delivery_free_threshold
     settings.logo_url = new_settings.logo_url
     settings.show_full_page_countdown = new_settings.show_full_page_countdown
