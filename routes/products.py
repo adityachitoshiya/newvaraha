@@ -48,13 +48,32 @@ def update_product_rating(product_id: str, session: Session):
 
 # --- Schemas ---
 
+class ProductUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    price: Optional[float] = None
+    stock: Optional[int] = None
+    category: Optional[str] = None
+    metal: Optional[str] = None
+    carat: Optional[str] = None
+    stones: Optional[str] = None
+    polish: Optional[str] = None
+    premium: Optional[bool] = None
+    tag: Optional[str] = None
+    style: Optional[str] = None
+    image: Optional[str] = None
+    additional_images: Optional[str] = None
+    gender: Optional[str] = None
+    collection: Optional[str] = None
+    product_type: Optional[str] = None
+
+
 class ReviewCreate(BaseModel):
     product_id: str
     customer_name: str
     rating: int
     comment: str
     media_urls: List[str] = []
-
 
 
 @router.get("/api/products", response_model=List[Product])
@@ -82,8 +101,6 @@ def read_products(
     # Apply Sorting
     if sort:
         if sort == 'newest':
-            # Assuming higher ID means newer, or add created_at if available. 
-            # Using ID for now as per frontend logic
             query = query.order_by(Product.id.desc())
         elif sort == 'price_asc':
             query = query.order_by(Product.price.asc())
@@ -122,13 +139,14 @@ def create_product(product: Product, current_user: AdminUser = Depends(get_curre
     return product
 
 @router.put("/api/products/{product_id}", response_model=Product)
-def update_product(product_id: str, product_data: Product, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
+def update_product(product_id: str, product_data: ProductUpdate, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
     product = session.get(Product, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
-    product_data_dict = product_data.dict(exclude_unset=True)
-    for key, value in product_data_dict.items():
+    # Only update fields that were explicitly sent (not None)
+    update_data = product_data.dict(exclude_none=True)
+    for key, value in update_data.items():
         setattr(product, key, value)
     
     session.add(product)

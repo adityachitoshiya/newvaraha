@@ -20,7 +20,7 @@ class ProductBase(SQLModel):
     name: str = Field(index=True)
     description: Optional[str] = None
     price: Optional[float] = None
-    stock: Optional[int] = 0  # Optional for backward compatibility, will be created on server restart
+    stock: Optional[int] = None  # None = unlimited stock, 0 = out of stock
     category: Optional[str] = Field(default=None, index=True)
     metal: Optional[str] = None
     carat: Optional[str] = None
