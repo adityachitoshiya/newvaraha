@@ -63,29 +63,69 @@ def sync_cart(sync_data: CartSync, user: Customer = Depends(get_current_user), s
         session.commit()
         session.refresh(cart)
     
-    # Simple strategy: Add local items if they don't exist in DB
+    # Existing Items Map: Key = (clean_product_id, normalized_sku)
+    # clean_product_id: stripped of "-default"
+    # normalized_sku: None -> "{product_id}-default" for key matching
     existing_items = session.exec(select(CartItem).where(CartItem.cart_id == cart.id)).all()
-    existing_map = {(item.product_id, item.variant_sku): item for item in existing_items}
+    existing_map = {}
     
+    for item in existing_items:
+        # Normalize Data from DB
+        p_id = item.product_id
+        # SKUs in DB might be None (old data) or specific string
+        # We need a robust key. 
+        # Strategy: Use SKU if available, else construct default SKU
+        sku = item.variant_sku
+        
+        if not sku:
+             sku = f"{p_id}-default"
+             
+        existing_map[(p_id, sku)] = item
+
     for local_item in sync_data.local_items:
-        key = (local_item.product_id, local_item.variant_sku)
+        # Normalize incoming local data
+        local_p_id = local_item.product_id
+        if local_p_id.endswith("-default"):
+             local_p_id = local_p_id.replace("-default", "")
+             
+        local_sku = local_item.variant_sku
+        if not local_sku:
+             local_sku = f"{local_p_id}-default"
+             
+        key = (local_p_id, local_sku)
+        
+        # Fetch product to check stock
+        product = session.get(Product, local_p_id)
+        stock = product.stock if product and product.stock is not None else float('inf')
+
         if key in existing_map:
-            # Merge Strategy: Sum quantities (or keep max? summed is safer for guest->user transition)
+            # Merge: Update quantity but cap at stock
             existing_item = existing_map[key]
-            existing_item.quantity += local_item.quantity
+            new_qty = existing_item.quantity + local_item.quantity
+            
+            if new_qty > stock:
+                new_qty = stock # Cap at max available
+                
+            existing_item.quantity = new_qty
             session.add(existing_item)
         else:
-            # Add new item
-            new_item = CartItem(
-                cart_id=cart.id, 
-                product_id=local_item.product_id, 
-                quantity=local_item.quantity,
-                variant_sku=local_item.variant_sku
-            )
-            session.add(new_item)
+            # Add new item logic with stock check
+            final_qty = local_item.quantity
+            if final_qty > stock:
+                final_qty = stock # Cap at max available
+                
+            if final_qty > 0: # Only add if we have quantity
+                new_item = CartItem(
+                    cart_id=cart.id, 
+                    product_id=local_p_id, 
+                    quantity=final_qty,
+                    variant_sku=local_sku # normalized SKU
+                )
+                session.add(new_item)
+                # Add to map to handle duplicates within the SAME sync payload if any
+                existing_map[key] = new_item
     
     session.commit()
-    # Return full cart
     return get_cart(user, session)
 
 @router.post("/api/cart/items")
@@ -129,6 +169,12 @@ def add_to_cart(item_in: CartItemCreate, user: Customer = Depends(get_current_us
     )).first()
     
     if existing:
+        new_total_qty = existing.quantity + item_in.quantity
+        if product.stock is not None and new_total_qty > product.stock:
+             raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot add more. You already have {existing.quantity} in cart. Max available: {product.stock}"
+            )
         existing.quantity += item_in.quantity
         session.add(existing)
     else:
