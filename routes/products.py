@@ -138,6 +138,48 @@ def create_product(product: Product, current_user: AdminUser = Depends(get_curre
     session.refresh(product)
     return product
 
+@router.post("/api/products/bulk")
+def bulk_create_products(products: List[Product], current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Bulk create products from CSV/JSON upload"""
+    import time
+    created = []
+    errors = []
+    
+    for idx, product in enumerate(products):
+        try:
+            # Generate unique ID if not provided
+            if not product.id:
+                product.id = f"PROD-{int(time.time())}-{idx}"
+            
+            # Set defaults
+            if product.average_rating is None:
+                product.average_rating = None
+            if not product.total_reviews:
+                product.total_reviews = 0
+            if not product.rating_distribution:
+                product.rating_distribution = "{}"
+            if not product.additional_images:
+                product.additional_images = "[]"
+            if product.stock is None:
+                product.stock = 0
+                
+            session.add(product)
+            created.append(product.id)
+        except Exception as e:
+            errors.append({"row": idx + 1, "name": product.name, "error": str(e)})
+    
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=f"Database error: {str(e)}")
+    
+    return {
+        "success": len(created),
+        "errors": errors,
+        "created_ids": created
+    }
+
 @router.put("/api/products/{product_id}", response_model=Product)
 def update_product(product_id: str, product_data: ProductUpdate, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
     product = session.get(Product, product_id)
