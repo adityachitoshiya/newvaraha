@@ -2,16 +2,41 @@ from fastapi import APIRouter, Depends, Request
 from sqlmodel import Session, select
 from datetime import datetime
 import hashlib
+import requests
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Internal Imports
 from database import get_session
 from models import VisitorLog
 from pydantic import BaseModel
+from sqlalchemy import func, text
 
 router = APIRouter()
 
 class VisitRequest(BaseModel):
     path: str
+
+def get_geo_from_ip(ip: str) -> dict:
+    """Fetch city, state, country from IP using ip-api.com (free, 45 req/min)"""
+    try:
+        if ip in ("127.0.0.1", "unknown", "::1"):
+            return {"city": "Local", "state": "Local", "country": "Local"}
+        
+        res = requests.get(f"http://ip-api.com/json/{ip}?fields=status,city,regionName,country", timeout=3)
+        data = res.json()
+        
+        if data.get("status") == "success":
+            return {
+                "city": data.get("city", "Unknown"),
+                "state": data.get("regionName", "Unknown"),
+                "country": data.get("country", "Unknown")
+            }
+    except Exception as e:
+        logger.warning(f"Geo lookup failed for IP: {e}")
+    
+    return {"city": None, "state": None, "country": None}
 
 @router.post("/api/track-visit")
 async def track_visit(
@@ -20,16 +45,27 @@ async def track_visit(
     session: Session = Depends(get_session)
 ):
     # Get Client IP
-    client_ip = request.client.host if request.client else "unknown"
+    # Check X-Forwarded-For header first (for Vercel/proxy)
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else "unknown"
     
-    # Hash IP for basic privacy
+    # Hash IP for privacy
     ip_hash = hashlib.sha256(client_ip.encode()).hexdigest()
+    
+    # Fetch geo-location
+    geo = get_geo_from_ip(client_ip)
     
     # Create log entry
     log = VisitorLog(
         ip_hash=ip_hash,
         path=visit_data.path,
-        date=datetime.utcnow().strftime("%Y-%m-%d")
+        date=datetime.utcnow().strftime("%Y-%m-%d"),
+        city=geo.get("city"),
+        state=geo.get("state"),
+        country=geo.get("country")
     )
     
     session.add(log)
@@ -37,7 +73,6 @@ async def track_visit(
     
     return {"status": "success"}
 
-from sqlalchemy import func, text
 
 @router.get("/api/analytics")
 def get_analytics(session: Session = Depends(get_session)):
@@ -45,7 +80,6 @@ def get_analytics(session: Session = Depends(get_session)):
     total_visits = session.exec(select(func.count(VisitorLog.id))).one()
     
     # 2. Daily Stats (Last 30 Days)
-    # Using raw SQL for date grouping as it's cleaner across DBs
     daily_query = text("""
         SELECT date, COUNT(*) as count 
         FROM visitorlog 
@@ -60,13 +94,7 @@ def get_analytics(session: Session = Depends(get_session)):
         for row in daily_results
     ]
     
-    # 3. Active Users (approximate by unique IPs in last 5 minutes)
-    # Since we store simple iso dates, we'll approximate 'active' as 'today's unique visitors' 
-    # OR we can add timestamp column if needed. 
-    # For now, let's use unique IPs today as a proxy or just recent entries if we had timestamp.
-    # Current VisitorLog has (ip_hash, path, date).
-    # We will just return unique IPs today as "Active Today"
-    
+    # 3. Active Users (unique IPs today)
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
     active_query = select(func.count(VisitorLog.ip_hash.distinct())).where(VisitorLog.date == today_str)
     active_users = session.exec(active_query).one()
@@ -76,6 +104,63 @@ def get_analytics(session: Session = Depends(get_session)):
         "total_visits": total_visits,
         "daily_stats": daily_stats
     }
+
+
+@router.get("/api/analytics/geo")
+def get_geo_analytics(session: Session = Depends(get_session)):
+    """Get visitor location analytics - top states and countries"""
+    
+    # Top States (India)
+    state_query = text("""
+        SELECT state, COUNT(*) as count, COUNT(DISTINCT ip_hash) as unique_visitors
+        FROM visitorlog 
+        WHERE state IS NOT NULL AND state != '' AND state != 'Local'
+        GROUP BY state 
+        ORDER BY count DESC 
+        LIMIT 20
+    """)
+    state_results = session.exec(state_query).all()
+    top_states = [
+        {"state": row[0], "visits": row[1], "unique_visitors": row[2]}
+        for row in state_results
+    ]
+    
+    # Top Countries
+    country_query = text("""
+        SELECT country, COUNT(*) as count, COUNT(DISTINCT ip_hash) as unique_visitors
+        FROM visitorlog 
+        WHERE country IS NOT NULL AND country != '' AND country != 'Local'
+        GROUP BY country 
+        ORDER BY count DESC 
+        LIMIT 15
+    """)
+    country_results = session.exec(country_query).all()
+    top_countries = [
+        {"country": row[0], "visits": row[1], "unique_visitors": row[2]}
+        for row in country_results
+    ]
+    
+    # Top Cities
+    city_query = text("""
+        SELECT city, state, COUNT(*) as count
+        FROM visitorlog 
+        WHERE city IS NOT NULL AND city != '' AND city != 'Local'
+        GROUP BY city, state 
+        ORDER BY count DESC 
+        LIMIT 15
+    """)
+    city_results = session.exec(city_query).all()
+    top_cities = [
+        {"city": row[0], "state": row[1], "visits": row[2]}
+        for row in city_results
+    ]
+    
+    return {
+        "top_states": top_states,
+        "top_countries": top_countries,
+        "top_cities": top_cities
+    }
+
 
 @router.get("/api/analytics/logs")
 def get_logs(limit: int = 50, session: Session = Depends(get_session)):

@@ -140,6 +140,9 @@ class VisitorLog(SQLModel, table=True):
     path: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     date: str = Field(index=True) # YYYY-MM-DD for easy grouping
+    city: Optional[str] = None
+    state: Optional[str] = None
+    country: Optional[str] = None
 
 class HeroSlide(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
