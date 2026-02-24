@@ -163,6 +163,18 @@ def delete_product(product_id: str, current_user: AdminUser = Depends(get_curren
     session.commit()
     return {"ok": True}
 
+@router.patch("/api/products/{product_id}/spotlight")
+def toggle_spotlight(product_id: str, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Toggle whether a product appears in the homepage spotlight"""
+    product = session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    product.is_spotlight = not product.is_spotlight
+    session.add(product)
+    session.commit()
+    session.refresh(product)
+    return {"ok": True, "is_spotlight": product.is_spotlight}
+
 # --- Review Routes ---
 
 @router.post("/api/reviews", response_model=Dict)

@@ -39,6 +39,7 @@ class ProductBase(SQLModel):
     collection: Optional[str] = Field(default=None, index=True)  # "Bridal", "Minimal", etc.
     product_type: Optional[str] = Field(default=None, index=True)  # Product type classification
     colour: Optional[str] = None  # Product colour (e.g., Gold, Silver, Rose Gold)
+    is_spotlight: bool = False  # Show in homepage Product Spotlight section
 
 class Product(ProductBase, table=True):
     id: Optional[str] = Field(default=None, primary_key=True)
