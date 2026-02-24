@@ -82,6 +82,8 @@ def sync_cart(sync_data: CartSync, user: Customer = Depends(get_current_user), s
              
         existing_map[(p_id, sku)] = item
 
+    warnings = []
+    
     for local_item in sync_data.local_items:
         # Normalize incoming local data
         local_p_id = local_item.product_id
@@ -97,6 +99,7 @@ def sync_cart(sync_data: CartSync, user: Customer = Depends(get_current_user), s
         # Fetch product to check stock
         product = session.get(Product, local_p_id)
         stock = product.stock if product and product.stock is not None else float('inf')
+        product_name = product.name if product else local_p_id
 
         if key in existing_map:
             # REPLACE: Guest cart quantity IS the truth, overwrite DB
@@ -104,7 +107,8 @@ def sync_cart(sync_data: CartSync, user: Customer = Depends(get_current_user), s
             new_qty = local_item.quantity
             
             if new_qty > stock:
-                new_qty = stock # Cap at max available
+                warnings.append(f"{product_name}: quantity reduced from {new_qty} to {int(stock)} (limited stock)")
+                new_qty = int(stock)
                 
             existing_item.quantity = new_qty
             session.add(existing_item)
@@ -112,21 +116,23 @@ def sync_cart(sync_data: CartSync, user: Customer = Depends(get_current_user), s
             # Add new item logic with stock check
             final_qty = local_item.quantity
             if final_qty > stock:
-                final_qty = stock # Cap at max available
+                warnings.append(f"{product_name}: quantity reduced from {final_qty} to {int(stock)} (limited stock)")
+                final_qty = int(stock)
                 
             if final_qty > 0: # Only add if we have quantity
                 new_item = CartItem(
                     cart_id=cart.id, 
                     product_id=local_p_id, 
                     quantity=final_qty,
-                    variant_sku=local_sku # normalized SKU
+                    variant_sku=local_sku
                 )
                 session.add(new_item)
-                # Add to map to handle duplicates within the SAME sync payload if any
                 existing_map[key] = new_item
     
     session.commit()
-    return get_cart(user, session)
+    
+    cart_items = get_cart(user, session)
+    return {"items": cart_items, "warnings": warnings}
 
 @router.post("/api/cart/items")
 def add_to_cart(item_in: CartItemCreate, user: Customer = Depends(get_current_user), session: Session = Depends(get_session)):
@@ -202,6 +208,13 @@ def update_cart_item(item_id: int, quantity: int, user: Customer = Depends(get_c
     if quantity <= 0:
         session.delete(item)
     else:
+        # Stock validation
+        product = session.get(Product, item.product_id)
+        if product and product.stock is not None and quantity > product.stock:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Only {product.stock} units available in stock"
+            )
         item.quantity = quantity
         session.add(item)
     

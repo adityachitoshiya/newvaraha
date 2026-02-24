@@ -255,6 +255,17 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
     if order_data.codCharges:
         final_amount += order_data.codCharges
 
+    # 🔴 STOCK VALIDATION — check before creating order
+    from models import Product
+    for item in items_list:
+        product = session.get(Product, item.get("productId"))
+        if product:
+            qty = item.get("quantity", 1)
+            if product.stock is not None and product.stock <= 0:
+                raise HTTPException(status_code=400, detail=f"{product.name} is out of stock")
+            if product.stock is not None and qty > product.stock:
+                raise HTTPException(status_code=400, detail=f"{product.name}: only {product.stock} left in stock")
+
     new_order = Order(
         order_id=order_id_str,
         customer_name=order_data.name,
@@ -317,6 +328,17 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
         pass
 
     creds = json.loads(gateway.credentials_json)
+
+    # 🔴 STOCK VALIDATION — check before creating payment session
+    if order_data.items:
+        from models import Product as ProductModel
+        for item in order_data.items:
+            product = session.get(ProductModel, item.productId)
+            if product:
+                if product.stock is not None and product.stock <= 0:
+                    raise HTTPException(status_code=400, detail=f"{product.name} is out of stock")
+                if product.stock is not None and item.quantity > product.stock:
+                    raise HTTPException(status_code=400, detail=f"{product.name}: only {product.stock} left in stock")
 
     # 2. Initialize Provider
     if gateway.provider == "razorpay":
