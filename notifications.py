@@ -50,7 +50,19 @@ def send_order_notifications(order_data):
         email_provider = os.getenv("EMAIL_PROVIDER", "ses" if aws_access_key and aws_secret_key else "smtp").lower()
         
         # Prepare Email Content (Common for both)
-        subject_admin = f"New Order Received: {order_data.get('order_id')}"
+        # Extract product names for subject line
+        items_for_subject = order_data.get('items', [])
+        if not items_for_subject and 'items_json' in order_data:
+            try:
+                items_for_subject = json.loads(order_data['items_json'])
+            except:
+                items_for_subject = []
+        product_names = ', '.join([item.get('name', '') for item in items_for_subject if item.get('name')]) or 'Your Varaha Order'
+        # Truncate if too long
+        if len(product_names) > 60:
+            product_names = product_names[:57] + '...'
+        
+        subject_admin = f"New Order Received: {product_names}"
         body_admin = f"""
         <html>
         <body>
@@ -74,7 +86,7 @@ def send_order_notifications(order_data):
         msg_customer = None
         
         if customer_email:
-            subject_customer = f"Order Confirmation - {order_data.get('order_id')} | Varaha Jewels"
+            subject_customer = f"Order Confirmation - {product_names} | Varaha Jewels"
             # Prepare items HTML
             items_html = ""
             items = order_data.get('items', [])
