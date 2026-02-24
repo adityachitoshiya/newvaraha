@@ -99,9 +99,9 @@ def sync_cart(sync_data: CartSync, user: Customer = Depends(get_current_user), s
         stock = product.stock if product and product.stock is not None else float('inf')
 
         if key in existing_map:
-            # Merge: Update quantity but cap at stock
+            # REPLACE: Guest cart quantity IS the truth, overwrite DB
             existing_item = existing_map[key]
-            new_qty = existing_item.quantity + local_item.quantity
+            new_qty = local_item.quantity
             
             if new_qty > stock:
                 new_qty = stock # Cap at max available
@@ -220,3 +220,17 @@ def remove_from_cart(item_id: int, user: Customer = Depends(get_current_user), s
     session.delete(item)
     session.commit()
     return {"ok": True}
+
+@router.delete("/api/cart/clear")
+def clear_cart(user: Customer = Depends(get_current_user), session: Session = Depends(get_session)):
+    cart = session.exec(select(Cart).where(Cart.customer_id == user.id)).first()
+    if not cart:
+        return {"ok": True, "message": "Cart already empty"}
+    
+    # Delete all items in the cart
+    items = session.exec(select(CartItem).where(CartItem.cart_id == cart.id)).all()
+    for item in items:
+        session.delete(item)
+    
+    session.commit()
+    return {"ok": True, "message": "Cart cleared"}
