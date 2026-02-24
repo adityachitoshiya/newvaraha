@@ -45,18 +45,39 @@ async def track_visit(
     session: Session = Depends(get_session)
 ):
     # Get Client IP
-    # Check X-Forwarded-For header first (for Vercel/proxy)
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         client_ip = forwarded.split(",")[0].strip()
     else:
         client_ip = request.client.host if request.client else "unknown"
     
+    # Skip localhost/development traffic
+    if client_ip in ("127.0.0.1", "::1", "unknown", "localhost"):
+        return {"status": "skipped", "reason": "localhost"}
+    
     # Hash IP for privacy
     ip_hash = hashlib.sha256(client_ip.encode()).hexdigest()
     
     # Fetch geo-location
     geo = get_geo_from_ip(client_ip)
+    
+    # Skip geo-blocked regions
+    try:
+        from models import BlockedRegion
+        blocked_regions = session.exec(
+            select(BlockedRegion).where(BlockedRegion.is_blocked == True)
+        ).all()
+        blocked_names = {r.region_name.lower() for r in blocked_regions}
+        blocked_codes = {r.region_code.lower() for r in blocked_regions}
+        
+        visitor_state = (geo.get("state") or "").lower()
+        visitor_country = (geo.get("country") or "").lower()
+        
+        if visitor_state in blocked_names or visitor_state in blocked_codes or \
+           visitor_country in blocked_names or visitor_country in blocked_codes:
+            return {"status": "skipped", "reason": "blocked_region"}
+    except Exception as e:
+        logger.warning(f"Blocked region check failed: {e}")
     
     # Create log entry
     log = VisitorLog(
