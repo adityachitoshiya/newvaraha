@@ -259,6 +259,102 @@ def get_reviews(product_id: str, session: Session = Depends(get_session)):
         # Return empty list instead of crashing
         return []
 
+from pydantic import BaseModel
+
+class BulkReviewUploadRequest(BaseModel):
+    csv_data: str
+
+import csv
+import io
+
+@router.post("/api/reviews/{product_id}/bulk")
+def bulk_upload_reviews(product_id: str, request: BulkReviewUploadRequest, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Bulk upload reviews from CSV string"""
+    try:
+        # Check if product exists
+        product = session.get(Product, product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+
+        # Parse CSV
+        f = io.StringIO(request.csv_data)
+        reader = csv.DictReader(f)
+        
+        # Verify required headers
+        required_headers = ['customer_name', 'rating', 'comment']
+        if not reader.fieldnames or not all(h in [fn.strip() for fn in reader.fieldnames] for h in required_headers):
+            raise HTTPException(status_code=400, detail=f"CSV must contain headers: {', '.join(required_headers)}")
+
+        created_count = 0
+        errors = []
+
+        for idx, row in enumerate(reader, start=2): # Start at 2 for 1-based index including header
+            try:
+                # Clean keys
+                clean_row = {k.strip(): v for k, v in row.items() if k}
+                
+                name = clean_row.get('customer_name', '').strip()
+                rating_str = clean_row.get('rating', '').strip()
+                comment = clean_row.get('comment', '').strip()
+                
+                if not name or not rating_str or not comment:
+                    errors.append(f"Row {idx}: Missing required fields")
+                    continue
+                    
+                try:
+                    rating = int(rating_str)
+                    if rating < 1 or rating > 5:
+                        errors.append(f"Row {idx}: Rating must be between 1 and 5")
+                        continue
+                except ValueError:
+                    errors.append(f"Row {idx}: Invalid rating number")
+                    continue
+
+                new_review = Review(
+                    product_id=product_id,
+                    customer_name=name,
+                    rating=rating,
+                    comment=comment,
+                    media_urls="[]",
+                    created_at=datetime.utcnow()
+                )
+                session.add(new_review)
+                created_count += 1
+                
+            except Exception as row_e:
+                errors.append(f"Row {idx}: {str(row_e)}")
+
+        session.commit()
+        
+        # Update product aggregate rating only if reviews were actually created
+        if created_count > 0:
+            update_product_rating(product_id, session)
+
+        return {
+            "success": True, 
+            "message": f"Successfully created {created_count} reviews.", 
+            "created": created_count,
+            "errors": errors
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error processing bulk reviews: {e}")
+        traceback.print_exc()
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+        for review in reviews:
+            review_data = review.model_dump() if hasattr(review, 'model_dump') else review.dict()
+            review_data["media_urls"] = json.loads(review.media_urls) if review.media_urls else []
+            result.append(review_data)
+        return result
+    except Exception as e:
+        print(f"Error fetching reviews: {e}")
+        traceback.print_exc()
+        # Return empty list instead of crashing
+        return []
+
 @router.delete("/api/reviews/{review_id}")
 def delete_review(review_id: int, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
     review = session.get(Review, review_id)
