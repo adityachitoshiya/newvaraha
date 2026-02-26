@@ -66,6 +66,7 @@ class ProductUpdate(BaseModel):
     gender: Optional[str] = None
     collection: Optional[str] = None
     product_type: Optional[str] = None
+    mrp: Optional[float] = None
 
 
 class ReviewCreate(BaseModel):
