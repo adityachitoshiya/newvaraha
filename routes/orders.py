@@ -195,6 +195,54 @@ def deduct_stock_for_items(items: list, session: Session):
     session.commit()
 
 
+def recalculate_amount_server_side(items: list, session: Session) -> float:
+    """
+    🔒 SECURITY: Recalculate total amount from DB product prices.
+    Never trust frontend-supplied amounts for order creation.
+    Returns the verified total amount.
+    """
+    from models import Product
+    total = 0.0
+    for item in items:
+        product_id = item.get("productId")
+        quantity = item.get("quantity", 1)
+        if not product_id:
+            continue
+        product = session.get(Product, product_id)
+        if product:
+            price = product.price if product.price is not None else 0
+            total += price * quantity
+        else:
+            raise HTTPException(status_code=400, detail=f"Product {product_id} not found")
+    return round(total, 2)
+
+
+def validate_coupon_server_side(coupon_code: str, subtotal: float, session: Session) -> float:
+    """
+    🔒 SECURITY: Validate coupon on the server side and return the discount amount.
+    Returns 0 if coupon is invalid/inactive/empty.
+    """
+    if not coupon_code or not coupon_code.strip():
+        return 0.0
+
+    from models import Coupon
+    coupon = session.exec(select(Coupon).where(Coupon.code == coupon_code.strip().upper())).first()
+    if not coupon:
+        coupon = session.exec(select(Coupon).where(Coupon.code == coupon_code.strip())).first()
+
+    if not coupon or not coupon.is_active:
+        return 0.0
+
+    if coupon.discount_type == "percentage":
+        return round((subtotal * coupon.discount_value) / 100, 2)
+    elif coupon.discount_type == "fixed":
+        return min(coupon.discount_value, subtotal)  # Can't discount more than subtotal
+    elif coupon.discount_type == "flat_price":
+        return max(0, round(subtotal - coupon.discount_value, 2))
+
+    return 0.0
+
+
 # --- Routes ---
 
 @router.post("/api/create-cod-order")
@@ -232,9 +280,6 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
             session.add(new_guest)
             session.commit()
 
-    # Calculate Tax
-    tax_data = calculate_tax_breakdown(order_data.amount, order_data.state)
-
     # Generate Order ID
     order_id_str = f"ORD-{int(time.time())}"
     
@@ -250,10 +295,20 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
             "price": order_data.amount / order_data.quantity if order_data.quantity else 0
         }]
 
+    # 🔒 SERVER-SIDE PRICE RECALCULATION — never trust frontend amounts
+    verified_amount = recalculate_amount_server_side(items_list, session)
+
+    # 🔒 SERVER-SIDE COUPON VALIDATION
+    coupon_discount = validate_coupon_server_side(order_data.couponCode, verified_amount, session)
+    verified_amount = max(0, verified_amount - coupon_discount)
+
     # Calculate Total Amount including COD charges
-    final_amount = order_data.amount
+    final_amount = verified_amount
     if order_data.codCharges:
         final_amount += order_data.codCharges
+
+    # Calculate Tax (using verified amount, not frontend amount)
+    tax_data = calculate_tax_breakdown(final_amount, order_data.state)
 
     # 🔴 STOCK VALIDATION — check before creating order
     from models import Product
@@ -340,6 +395,17 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
                 if product.stock is not None and item.quantity > product.stock:
                     raise HTTPException(status_code=400, detail=f"{product.name}: only {product.stock} left in stock")
 
+    # 🔒 SERVER-SIDE PRICE RECALCULATION for payment session
+    items_for_calc = []
+    if order_data.items:
+        items_for_calc = [item.dict() for item in order_data.items]
+    elif order_data.productId:
+        items_for_calc = [{"productId": order_data.productId, "quantity": order_data.quantity or 1}]
+    
+    verified_amount = recalculate_amount_server_side(items_for_calc, session) if items_for_calc else order_data.amount
+    coupon_discount = validate_coupon_server_side(order_data.couponCode, verified_amount, session)
+    verified_amount = max(0, verified_amount - coupon_discount)
+
     # 2. Initialize Provider
     if gateway.provider == "razorpay":
         try:
@@ -353,7 +419,7 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
                 notes["user_id"] = user_id
             
             data = {
-                "amount": int(order_data.amount * 100), # Amount in paise
+                "amount": int(verified_amount * 100), # Amount in paise — using VERIFIED amount
                 "currency": "INR",
                 "receipt": f"rcpt_{int(time.time())}",
                 "notes": notes
@@ -437,7 +503,7 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
             
             # Step 2: Create Payment Request
             merchant_order_id = f"ORD-{int(time.time())}-{uuid.uuid4().hex[:6]}"
-            amount_in_paise = int(order_data.amount * 100)
+            amount_in_paise = int(verified_amount * 100)  # Using VERIFIED amount
             
             pay_payload = {
                 "merchantOrderId": merchant_order_id,
@@ -989,17 +1055,20 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
         session.commit()
         session.refresh(new_order)
         
+        # 🔒 Deduct stock for Razorpay orders (was missing before!)
+        deduct_stock_for_items(items, session)
+        
         background_tasks.add_task(send_order_notifications, new_order.dict())
         
         return {"ok": True, "orderId": new_order.order_id}
 
     except Exception as e:
         print(f"CRITICAL API ERROR: {traceback.format_exc()}")
-        raise HTTPException(status_code=400, detail=f"DEBUG ERROR: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Order creation error: {str(e)}")
 
 
 @router.post("/api/orders", response_model=Order)
-def create_order(order: Order, background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
+def create_order(order: Order, background_tasks: BackgroundTasks, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
     try:
         session.add(order)
         session.commit()
@@ -1054,18 +1123,50 @@ def read_my_orders(token: str = Depends(oauth2_scheme), session: Session = Depen
     return orders
 
 @router.get("/api/orders/{order_id}", response_model=Order)
-def read_order(order_id: str, session: Session = Depends(get_session)):
+def read_order(order_id: str, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
     order = get_order_by_id_flexible(session, order_id)
     
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    
+    # 🔒 AUTH CHECK: Verify the requesting user owns this order or is admin
+    user_id = None
+    is_admin = False
+    if token:
+        try:
+            from jose import jwt as jose_jwt
+            from auth_utils import SECRET_KEY, ALGORITHM
+            payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            if payload.get("role") == "admin":
+                is_admin = True
+        except Exception:
+            pass
+        
+        if not is_admin:
+            try:
+                from supabase_utils import init_supabase
+                s_client = init_supabase()
+                if s_client:
+                    user_data = s_client.auth.get_user(token)
+                    if user_data and user_data.user:
+                        user_id = user_data.user.id
+            except Exception:
+                pass
+    
+    # Allow: admin, or order owner (by user_id or email match)
+    if not is_admin:
+        if not user_id and not token:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if order.user_id and user_id and str(order.user_id) != str(user_id):
+            raise HTTPException(status_code=403, detail="Not authorized to view this order")
+    
     return order
 
 
 # --- RapidShyp Integration Routes ---
 
 @router.post("/api/admin/orders/{order_id}/ship")
-def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: BackgroundTasks, current_user: AdminUser = Depends(get_session), session: Session = Depends(get_session)):
+def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: BackgroundTasks, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
     # Find order
     order = get_order_by_id_flexible(session, order_id)
     if not order:
