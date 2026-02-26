@@ -73,12 +73,14 @@ def on_startup():
         from migrate_categories import create_category_table
         from migration_add_colour_announcement import run_migration as run_colour_announcement_migration
         from migration_add_review_columns import run_migration as run_review_migration
+        from migration_add_mrp import run_migration as run_mrp_migration
         
         print("🚀 Running Startup Migrations...")
         run_gender_migration()
         create_category_table()
         run_colour_announcement_migration()
         run_review_migration()
+        run_mrp_migration()
         print("✅ Startup Migrations Completed")
     except Exception as e:
         logger.error(f"Startup Migration Failed: {e}")
