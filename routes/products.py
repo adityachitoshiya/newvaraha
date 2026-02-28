@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from datetime import datetime
 import json
 import traceback
+import re
+import unicodedata
 
 # Internal Imports
 from database import get_session
@@ -16,6 +18,30 @@ import os
 router = APIRouter()
 
 # --- Helper Functions ---
+def generate_slug(name: str) -> str:
+    """Convert product name to URL-friendly slug."""
+    # Normalize unicode characters
+    name = unicodedata.normalize('NFKD', name)
+    name = name.encode('ascii', 'ignore').decode('ascii')
+    # Lowercase
+    name = name.lower()
+    # Replace spaces and special chars with hyphens
+    name = re.sub(r'[^a-z0-9]+', '-', name)
+    # Strip leading/trailing hyphens
+    name = name.strip('-')
+    return name
+
+def unique_slug(base_slug: str, exclude_id: str, session: Session) -> str:
+    """Ensure slug is unique; append number if collision."""
+    slug = base_slug
+    counter = 1
+    while True:
+        existing = session.exec(select(Product).where(Product.slug == slug)).first()
+        if not existing or existing.id == exclude_id:
+            return slug
+        slug = f"{base_slug}-{counter}"
+        counter += 1
+
 def update_product_rating(product_id: str, session: Session):
     """Update product rating aggregation after review changes"""
     reviews = session.exec(
@@ -50,6 +76,7 @@ def update_product_rating(product_id: str, session: Session):
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
+    slug: Optional[str] = None
     description: Optional[str] = None
     price: Optional[float] = None
     stock: Optional[int] = None
@@ -67,6 +94,8 @@ class ProductUpdate(BaseModel):
     collection: Optional[str] = None
     product_type: Optional[str] = None
     mrp: Optional[float] = None
+    colour: Optional[str] = None
+    is_mega_deal: Optional[bool] = None
 
 
 class ReviewCreate(BaseModel):
@@ -119,7 +148,11 @@ def read_products(
 
 @router.get("/api/products/{product_id}", response_model=Product)
 def read_product(product_id: str, session: Session = Depends(get_session)):
+    # First try by primary key (ID)
     product = session.get(Product, product_id)
+    if not product:
+        # Fallback: try lookup by slug
+        product = session.exec(select(Product).where(Product.slug == product_id)).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     return product
@@ -133,7 +166,12 @@ def create_product(product: Product, current_user: AdminUser = Depends(get_curre
         product.total_reviews = 0
     if not hasattr(product, 'rating_distribution') or not product.rating_distribution:
         product.rating_distribution = "{}"
-    
+
+    # Auto-generate slug from name if not provided
+    if not product.slug and product.name:
+        base = generate_slug(product.name)
+        product.slug = unique_slug(base, product.id or "", session)
+
     session.add(product)
     session.commit()
     session.refresh(product)
@@ -191,7 +229,17 @@ def update_product(product_id: str, product_data: ProductUpdate, current_user: A
     update_data = product_data.dict(exclude_none=True)
     for key, value in update_data.items():
         setattr(product, key, value)
-    
+
+    # Regenerate slug if name was updated and slug not explicitly provided
+    if 'name' in update_data and 'slug' not in update_data:
+        base = generate_slug(product.name)
+        product.slug = unique_slug(base, product_id, session)
+
+    # Generate slug if product still lacks one
+    if not product.slug and product.name:
+        base = generate_slug(product.name)
+        product.slug = unique_slug(base, product_id, session)
+
     session.add(product)
     session.commit()
     session.refresh(product)
@@ -247,6 +295,11 @@ def create_review(review_data: ReviewCreate, session: Session = Depends(get_sess
 def get_reviews(product_id: str, session: Session = Depends(get_session)):
     try:
         reviews = session.exec(select(Review).where(Review.product_id == product_id)).all()
+        # If no reviews found, try resolving product_id as a slug
+        if not reviews:
+            product = session.exec(select(Product).where(Product.slug == product_id)).first()
+            if product:
+                reviews = session.exec(select(Review).where(Review.product_id == product.id)).all()
         # Parse media_urls back to list
         result = []
         for review in reviews:

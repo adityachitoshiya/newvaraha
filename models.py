@@ -18,6 +18,7 @@ class Category(CategoryBase, table=True):
 
 class ProductBase(SQLModel):
     name: str = Field(index=True)
+    slug: Optional[str] = Field(default=None, index=True)  # URL-friendly slug from product name
     description: Optional[str] = None
     price: Optional[float] = None
     mrp: Optional[float] = None
@@ -41,6 +42,7 @@ class ProductBase(SQLModel):
     product_type: Optional[str] = Field(default=None, index=True)  # Product type classification
     colour: Optional[str] = None  # Product colour (e.g., Gold, Silver, Rose Gold)
     is_spotlight: bool = False  # Show in homepage Product Spotlight section
+    is_mega_deal: bool = False  # Show MEGA DEAL banner on this product
 
 class Product(ProductBase, table=True):
     id: Optional[str] = Field(default=None, primary_key=True)
@@ -72,6 +74,10 @@ class Order(OrderBase, table=True):
     user_id: Optional[uuid.UUID] = Field(default=None, index=True)
     label_url: Optional[str] = None
     manifest_url: Optional[str] = None
+    
+    # Discount Tracking
+    original_amount: Optional[float] = None  # Amount before prepaid discount
+    discount_amount: Optional[float] = 0.0   # Prepaid discount applied
     
     # Tax & Location Fields
     state: Optional[str] = None
@@ -133,6 +139,9 @@ class Coupon(SQLModel, table=True):
     code: str = Field(index=True, unique=True)
     discount_type: str # 'percentage', 'fixed', 'flat_price'
     discount_value: float
+    min_order_amount: Optional[float] = None  # Minimum cart value required to apply coupon
+    max_discount: Optional[float] = None      # Maximum discount cap (useful for percentage coupons)
+    payment_method_restriction: str = "none"   # none | prepaid_only | upi_only | cod_only
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
 class VisitorLog(SQLModel, table=True):
@@ -153,6 +162,8 @@ class HeroSlide(SQLModel, table=True):
     subtitle: str
     link_text: str = "Explore Collections"
     link_url: str = "/collections/all"
+    secondary_link_text: str = "Our Heritage"
+    secondary_link_url: str = "/heritage"
     order: int = 0
 
 class CreatorVideo(SQLModel, table=True):
@@ -196,11 +207,14 @@ class StoreSettings(SQLModel, table=True):
     mega_deal_enabled: bool = True
     mega_deal_discount_percent: int = 10
     mega_deal_label: str = "MEGA DEAL"
-    bank_offers_json: str = '[{"title":"10% Instant Discount on Axis Bank Cards","subtitle":"Min Spend ₹3,500, Max Discount ₹500"},{"title":"5% Unlimited Cashback on Credit Cards","subtitle":""},{"title":"EMI option available","subtitle":"EMI starting from ₹500/month"}]'
+    bank_offers_json: str = '[{"icon":"discount","highlight":"15% Off","title":"on buying 3 or more products.","subtitle":""},{"icon":"discount","highlight":"12% Off","title":"on buying 2 products.","subtitle":""},{"icon":"onecard","highlight":"10% Off","title":"on OneCard credit card.","subtitle":"Max discount ₹500"},{"icon":"upi","highlight":"Extra 5%","title":"on all UPI payments.","subtitle":""},{"icon":"mobikwik","highlight":"15% Cashback","title":"on Mobikwik wallet.","subtitle":"Max cashback ₹200"}]'
     
     # Prepaid Payment Discount (Admin-controlled)
     prepaid_discount_enabled: bool = True
     prepaid_discount_percent: int = 5
+
+    # Heritage / Featured Collections Cards (Admin-controlled)
+    heritage_cards_json: str = '[{"title":"Heritage Collection","description":"Timeless pieces inspired by royal traditions","image":"/varaha-assets/heroimage.avif","href":"/shop?category=Heritage"},{"title":"Bridal Elegance","description":"Exquisite adornments for your special day","image":"/varaha-assets/Jimage2.avif","href":"/shop?category=Bridal"},{"title":"Contemporary Classics","description":"Modern designs with traditional soul","image":"/varaha-assets/Jimage3.webp","href":"/shop?category=Contemporary"},{"title":"Temple Treasures","description":"Sacred artistry in every detail","image":"/varaha-assets/herosection2.jpg","href":"/shop?category=Temple"}]'
 
 
 
@@ -209,6 +223,26 @@ class ActiveVisitor(SQLModel, table=True):
     ip_hash: str = Field(primary_key=True)
     last_seen: datetime = Field(default_factory=datetime.utcnow)
     path: str
+
+
+# --- Promotions / Exclusive Offers ---
+class Promotion(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    title: str                                          # e.g. "Extra 5% instant discount on Prepaid"
+    highlight: Optional[str] = None                     # Bold red text, e.g. "Extra 5%"
+    subtitle: Optional[str] = None                      # Small grey text / conditions
+    icon: str = "discount"                              # Emoji-based icon key (discount, upi, card, zap, etc.)
+    icon_url: Optional[str] = None                      # Custom uploaded icon URL (overrides icon key if set)
+    coupon_code: Optional[str] = None                   # e.g. "PP5PERCENT" — nullable for auto-applied offers
+    discount_type: str = "percentage"                   # percentage | flat | bogo
+    discount_value: float = 0                           # e.g. 5 for 5%, 500 for ₹500
+    min_cart_value: Optional[float] = None              # e.g. 599 — minimum cart total to apply
+    payment_method_restriction: str = "none"            # none | prepaid_only | upi_only | cod_only
+    category_restriction: Optional[str] = None          # e.g. "necklaces" — nullable for all categories
+    is_active: bool = True
+    sort_order: int = 0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
 
 class Cart(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

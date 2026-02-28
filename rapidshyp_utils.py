@@ -1,6 +1,7 @@
 import requests
 import os
 import json
+import re
 import logging
 
 # Configure logging
@@ -91,18 +92,40 @@ class RapidShypClient:
         # Items
         order_items = []
         for item in order_data.get("items", []):
-            sku = item.get("sku") or item.get("id") or "SKU_DEFAULT"
-            name = item.get("name")
-            if not name:
-                name = f"Item - {sku}"
-            
+            # Support both camelCase (frontend cart) and snake_case keys
+            name = (
+                item.get("name") or
+                item.get("productName") or
+                item.get("product_name") or
+                "Jewellery Item"
+            )
+            variant_label = item.get("variantName") or item.get("variant") or item.get("variantId") or ""
+            if variant_label:
+                full_name = f"{name} - {variant_label}"
+            else:
+                full_name = name
+
+            # Build digit-only SKU: VJ-{last 10 digits of productId}-{last 4 unique digits of variantId}
+            product_id = item.get("productId") or item.get("product_id") or ""
+            variant_id = item.get("variantId") or item.get("variant_id") or ""
+            sku = item.get("sku") or ""
+            if not sku:
+                pid_digits = re.sub(r'\D+', '', product_id)[-10:]
+                vid_digits = re.sub(r'\D+', '', variant_id)
+                if pid_digits and vid_digits and vid_digits[-4:] != pid_digits[-4:]:
+                    sku = f"VJ-{pid_digits}-{vid_digits[-4:]}"
+                elif pid_digits:
+                    sku = f"VJ-{pid_digits}"
+                else:
+                    sku = "VJ-0000"
+
             order_items.append({
-                "itemName": name[:199], # Limit length, ensure not empty
-                "sku": sku,
+                "itemName": full_name[:199],
+                "sku": sku[:50],
                 "units": int(item.get("quantity", 1)),
                 "unitPrice": float(item.get("price", 0)),
                 "tax": 0.0,
-                "productWeight": 0.5 # Default weights if not tracked
+                "productWeight": 0.5
             })
 
         payload = {
@@ -150,18 +173,35 @@ class RapidShypClient:
         
         order_items = []
         for item in return_data.get("items", []):
-             sku = item.get("sku") or "SKU_DEF"
-             name = item.get("name")
-             if not name:
-                 name = f"Item - {sku}"
+            name = (
+                item.get("name") or
+                item.get("productName") or
+                item.get("product_name") or
+                "Jewellery Item"
+            )
+            variant_label = item.get("variantName") or item.get("variant") or item.get("variantId") or ""
+            full_name = f"{name} - {variant_label}" if variant_label else name
 
-             order_items.append({
-                "itemName": name[:199],
-                "sku": sku,
+            product_id = item.get("productId") or item.get("product_id") or ""
+            variant_id = item.get("variantId") or item.get("variant_id") or ""
+            sku = item.get("sku") or ""
+            if not sku:
+                pid_digits = re.sub(r'\D+', '', product_id)[-10:]
+                vid_digits = re.sub(r'\D+', '', variant_id)
+                if pid_digits and vid_digits and vid_digits[-4:] != pid_digits[-4:]:
+                    sku = f"VJ-{pid_digits}-{vid_digits[-4:]}"
+                elif pid_digits:
+                    sku = f"VJ-{pid_digits}"
+                else:
+                    sku = "VJ-0000"
+
+            order_items.append({
+                "itemName": full_name[:199],
+                "sku": sku[:50],
                 "units": int(item.get("quantity", 1)),
                 "unitPrice": float(item.get("price", 0)),
                 "tax": 0.0,
-             })
+            })
 
         payload = {
             "orderId": str(return_data.get("orderId")),

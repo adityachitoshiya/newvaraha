@@ -84,6 +84,8 @@ def create_hero_slide(
     subtitle: str = Form(...),
     link_text: str = Form(...),
     link_url: str = Form(...),
+    secondary_link_text: str = Form("Our Heritage"),
+    secondary_link_url: str = Form("/heritage"),
     image_file: UploadFile = File(...),
     mobile_image_file: Optional[UploadFile] = File(None),
     session: Session = Depends(get_session),
@@ -105,6 +107,8 @@ def create_hero_slide(
             subtitle=subtitle,
             link_text=link_text,
             link_url=link_url,
+            secondary_link_text=secondary_link_text,
+            secondary_link_url=secondary_link_url,
             image=image_url,
             mobile_image=mobile_image_url
         )

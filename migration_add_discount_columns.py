@@ -1,0 +1,46 @@
+"""
+Migration to add discount tracking columns to the order table.
+Adds: original_amount, discount_amount
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from sqlalchemy import text
+from sqlmodel import create_engine
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    print("ERROR: DATABASE_URL not set.")
+    sys.exit(1)
+
+engine = create_engine(DATABASE_URL.replace("postgres://", "postgresql://"))
+
+
+def run_migration():
+    print("Adding discount columns to order table...")
+
+    columns = [
+        ("original_amount", "FLOAT"),
+        ("discount_amount", "FLOAT DEFAULT 0.0"),
+    ]
+
+    with engine.connect() as conn:
+        for col_name, col_def in columns:
+            try:
+                conn.execute(text(f'ALTER TABLE "order" ADD COLUMN {col_name} {col_def}'))
+                print(f"  Added: {col_name}")
+            except Exception as e:
+                if "already exists" in str(e).lower():
+                    print(f"  Skipped: {col_name} (already exists)")
+                else:
+                    print(f"  Error adding {col_name}: {e}")
+        conn.commit()
+
+    print("Discount columns migration complete!")
+
+
+if __name__ == "__main__":
+    run_migration()

@@ -211,6 +211,10 @@ def recalculate_amount_server_side(items: list, session: Session) -> float:
         product = session.get(Product, product_id)
         if product:
             price = product.price if product.price is not None else 0
+            # Validate: selling price must not exceed MRP
+            if product.mrp is not None and price > product.mrp:
+                print(f"⚠️ PRICE INTEGRITY: Product {product_id} price ({price}) > MRP ({product.mrp}). Using MRP.")
+                price = product.mrp
             total += price * quantity
         else:
             raise HTTPException(status_code=400, detail=f"Product {product_id} not found")
@@ -233,14 +237,110 @@ def validate_coupon_server_side(coupon_code: str, subtotal: float, session: Sess
     if not coupon or not coupon.is_active:
         return 0.0
 
-    if coupon.discount_type == "percentage":
-        return round((subtotal * coupon.discount_value) / 100, 2)
-    elif coupon.discount_type == "fixed":
-        return min(coupon.discount_value, subtotal)  # Can't discount more than subtotal
-    elif coupon.discount_type == "flat_price":
-        return max(0, round(subtotal - coupon.discount_value, 2))
+    # Check minimum order amount (if set on coupon)
+    min_order = getattr(coupon, 'min_order_amount', None)
+    if min_order and subtotal < min_order:
+        print(f"⚠️ Coupon {coupon.code}: subtotal ₹{subtotal} < min_order ₹{min_order}. Rejecting.")
+        return 0.0
 
-    return 0.0
+    discount = 0.0
+    if coupon.discount_type == "percentage":
+        discount = round((subtotal * coupon.discount_value) / 100, 2)
+    elif coupon.discount_type == "fixed":
+        discount = min(coupon.discount_value, subtotal)  # Can't discount more than subtotal
+    elif coupon.discount_type == "flat_price":
+        discount = max(0, round(subtotal - coupon.discount_value, 2))
+
+    # Cap discount: never allow final amount to go below ₹1
+    max_allowed_discount = max(0, subtotal - 1)
+    if discount > max_allowed_discount:
+        print(f"⚠️ Coupon {coupon.code}: discount ₹{discount} capped to ₹{max_allowed_discount} (min final = ₹1)")
+        discount = max_allowed_discount
+
+    # Apply max_discount cap if set on coupon
+    max_discount = getattr(coupon, 'max_discount', None)
+    if max_discount and discount > max_discount:
+        discount = max_discount
+
+    return round(discount, 2)
+
+
+def validate_promotion_restrictions(coupon_code: str, subtotal: float, payment_method: str, items: list, session: Session):
+    """
+    🔒 SECURITY: Check if a coupon is linked to a Promotion and enforce its restrictions.
+    Raises HTTPException if restrictions are violated.
+    payment_method: 'cod', 'prepaid', 'upi', 'razorpay', 'phonepe', etc.
+    """
+    if not coupon_code or not coupon_code.strip():
+        return
+
+    from models import Promotion, Product
+    promo = session.exec(
+        select(Promotion).where(
+            Promotion.coupon_code == coupon_code.strip().upper(),
+            Promotion.is_active == True
+        )
+    ).first()
+    if not promo:
+        # Also try case-sensitive match
+        promo = session.exec(
+            select(Promotion).where(
+                Promotion.coupon_code == coupon_code.strip(),
+                Promotion.is_active == True
+            )
+        ).first()
+
+    if not promo:
+        return  # No promotion linked — standard coupon, skip
+
+    # 1. Min Cart Value Check
+    if promo.min_cart_value and subtotal < promo.min_cart_value:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This offer requires a minimum cart value of ₹{int(promo.min_cart_value)}. Your cart is ₹{int(subtotal)}."
+        )
+
+    # 2. Payment Method Restriction
+    pm_restriction = promo.payment_method_restriction or "none"
+    if pm_restriction != "none":
+        pm_lower = payment_method.lower() if payment_method else ""
+        allowed = False
+        if pm_restriction == "prepaid_only" and pm_lower in ("prepaid", "razorpay", "phonepe", "upi", "online"):
+            allowed = True
+        elif pm_restriction == "upi_only" and pm_lower in ("upi", "phonepe"):
+            allowed = True
+        elif pm_restriction == "cod_only" and pm_lower == "cod":
+            allowed = True
+        elif pm_restriction == "none":
+            allowed = True
+
+        if not allowed:
+            restriction_labels = {
+                "prepaid_only": "prepaid payments only",
+                "upi_only": "UPI payments only",
+                "cod_only": "Cash on Delivery only",
+            }
+            raise HTTPException(
+                status_code=400,
+                detail=f"This offer is valid for {restriction_labels.get(pm_restriction, pm_restriction)}. Please change your payment method."
+            )
+
+    # 3. Category Restriction
+    if promo.category_restriction:
+        allowed_cats = [c.strip().lower() for c in promo.category_restriction.split(",") if c.strip()]
+        if allowed_cats:
+            for item in items:
+                pid = item.get("productId")
+                if not pid:
+                    continue
+                product = session.get(Product, pid)
+                if product:
+                    product_cat = (product.category or "").lower()
+                    if product_cat and product_cat not in allowed_cats:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"This offer is only valid for {', '.join(allowed_cats)} products. '{product.name}' doesn't qualify."
+                        )
 
 
 # --- Routes ---
@@ -287,9 +387,13 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
     if order_data.items:
         items_list = [item.dict() for item in order_data.items]
     else:
-         items_list = [{
+        from models import Product
+        _pid = order_data.productId
+        _db_prod = session.get(Product, _pid) if _pid else None
+        _pname = _db_prod.name if _db_prod else "Jewellery Item"
+        items_list = [{
             "productId": order_data.productId,
-            "productName": "Direct Product", # Ideally fetch name
+            "productName": _pname,
             "variantId": order_data.variantId,
             "quantity": order_data.quantity,
             "price": order_data.amount / order_data.quantity if order_data.quantity else 0
@@ -301,6 +405,9 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
     # 🔒 SERVER-SIDE COUPON VALIDATION
     coupon_discount = validate_coupon_server_side(order_data.couponCode, verified_amount, session)
     verified_amount = max(0, verified_amount - coupon_discount)
+
+    # 🔒 PROMOTION RESTRICTION VALIDATION (payment method, min cart, category)
+    validate_promotion_restrictions(order_data.couponCode, verified_amount + coupon_discount, "cod", items_list, session)
 
     # Calculate Total Amount including COD charges
     final_amount = verified_amount
@@ -405,6 +512,9 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
     verified_amount = recalculate_amount_server_side(items_for_calc, session) if items_for_calc else order_data.amount
     coupon_discount = validate_coupon_server_side(order_data.couponCode, verified_amount, session)
     verified_amount = max(0, verified_amount - coupon_discount)
+
+    # 🔒 PROMOTION RESTRICTION VALIDATION (payment method, min cart, category)
+    validate_promotion_restrictions(order_data.couponCode, verified_amount + coupon_discount, "prepaid", items_for_calc, session)
 
     # 2. Initialize Provider
     if gateway.provider == "razorpay":
@@ -838,9 +948,14 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
         # Prepare items
         items = order_data.get('items', [])
         if not items and order_data.get('productId'):
+            # Try to fetch product name from DB
+            from models import Product
+            product_id = order_data.get('productId')
+            db_product = session.get(Product, product_id)
+            product_name = db_product.name if db_product else "Jewellery Item"
             items = [{
-                "productId": order_data.get('productId'),
-                "productName": "Direct Product",
+                "productId": product_id,
+                "productName": product_name,
                 "variantId": order_data.get('variantId'),
                 "quantity": order_data.get('quantity'),
                 "price": order_data.get('amount')
@@ -864,6 +979,8 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
             city=order_data.get('city'),
             pincode=order_data.get('pincode'),
             total_amount=final_amount,  # Apply discount
+            original_amount=order_data.get('amount', 0),  # Store original
+            discount_amount=prepaid_discount,  # Store discount
             payment_method="online",
             status="paid",
             email_status="pending",
@@ -955,9 +1072,13 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
         
         items = order_data.get('items', [])
         if not items and order_data.get('productId'):
+            from models import Product
+            _pid = order_data.get('productId')
+            _db_prod = session.get(Product, _pid) if _pid else None
+            _pname = _db_prod.name if _db_prod else "Jewellery Item"
             items = [{
-                "productId": order_data.get('productId'),
-                "productName": "Direct Product",
+                "productId": _pid,
+                "productName": _pname,
                 "variantId": order_data.get('variantId'),
                 "quantity": order_data.get('quantity'),
                 "price": order_data.get('amount')
@@ -1022,7 +1143,7 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
         final_amount = order_data.get('amount') - prepaid_discount
 
         new_order = Order(
-            order_id=f"ORD-{razorpay_order_id}" if razorpay_order_id else f"ORD-{int(time.time())}",
+            order_id=f"ORD-{razorpay_order_id.replace('order_', '')}" if razorpay_order_id else f"ORD-{int(time.time())}",
             customer_name=order_data.get('name'),
             email=order_data.get('email'),
             phone=order_data.get('contact'),
@@ -1030,6 +1151,8 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
             city=order_data.get('city'),
             pincode=order_data.get('pincode'),
             total_amount=final_amount,  # Apply discount
+            original_amount=order_data.get('amount'),  # Store original
+            discount_amount=prepaid_discount,  # Store discount
             payment_method="online",
             status="paid",
             email_status="pending", # Explicitly set default

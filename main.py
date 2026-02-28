@@ -9,7 +9,7 @@ from database import create_db_and_tables
 
 from middleware import MonitoringMiddleware
 # Import Routers
-from routes import auth, customer, products, cart, orders, gateways, admin, settings, coupons, analytics, health, dashboard, notifications, reports, tracking, otp, web, categories, wishlist
+from routes import auth, customer, products, cart, orders, gateways, admin, settings, coupons, analytics, health, dashboard, notifications, reports, tracking, otp, web, categories, wishlist, promotions
 
 import logging
 from monitoring import monitor
@@ -74,6 +74,10 @@ def on_startup():
         from migration_add_colour_announcement import run_migration as run_colour_announcement_migration
         from migration_add_review_columns import run_migration as run_review_migration
         from migration_add_mrp import run_migration as run_mrp_migration
+        from migration_add_discount_columns import run_migration as run_discount_migration
+        from migration_add_mega_deal import run as run_mega_deal_migration
+        from migration_add_heritage_cms import run as run_heritage_cms_migration
+        from migration_add_slug import run_migration as run_slug_migration
         
         print("🚀 Running Startup Migrations...")
         run_gender_migration()
@@ -81,6 +85,10 @@ def on_startup():
         run_colour_announcement_migration()
         run_review_migration()
         run_mrp_migration()
+        run_discount_migration()
+        run_mega_deal_migration()
+        run_heritage_cms_migration()
+        run_slug_migration()
         print("✅ Startup Migrations Completed")
     except Exception as e:
         logger.error(f"Startup Migration Failed: {e}")
@@ -107,3 +115,4 @@ app.include_router(tracking.router, tags=["Tracking"])
 app.include_router(otp.router, tags=["OTP"])
 app.include_router(categories.router, tags=["Categories"])
 app.include_router(wishlist.router, tags=["Wishlist"])
+app.include_router(promotions.router, tags=["Promotions"])

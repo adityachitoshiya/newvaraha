@@ -38,6 +38,7 @@ def get_cart(user: Customer = Depends(get_current_user), session: Session = Depe
         if product:
             # Ensure price is never None/null - use 0 as fallback
             price = product.price if product.price is not None else 0
+            mrp = product.mrp if product.mrp is not None else price  # MRP from DB, fallback to price
             stock = product.stock if product.stock is not None else 0
             result.append({
                 "id": item.id,
@@ -45,10 +46,14 @@ def get_cart(user: Customer = Depends(get_current_user), session: Session = Depe
                 "productName": product.name,
                 "quantity": item.quantity,
                 "stock": stock,  # Include stock for frontend validation
+                "product": {
+                    "mrp": mrp  # Real MRP from database
+                },
                 "variant": {
                     "sku": item.variant_sku or f"{product.id}-default",
                     "name": "Standard", # Placeholder
                     "price": price,
+                    "compareAt": mrp,  # MRP as compareAt for frontend compatibility
                     "image": product.image
                 }
             })

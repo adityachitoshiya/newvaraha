@@ -23,35 +23,15 @@ def get_store_settings(session: Session = Depends(get_session)):
 
 @router.put("/api/settings")
 def update_store_settings(new_settings: StoreSettings, session: Session = Depends(get_session)):
-    # Ideally should be protected by admin token, but leaving as is from main.py or verified via usage
-    # The original main.py didn't strictly enforce token on PUT /api/settings but it corresponds to admin panel.
-    # We'll allow it but usually it should be protected.
-    
     settings = session.get(StoreSettings, 1)
     if not settings:
         settings = StoreSettings(id=1)
     
-    # Update fields
-    settings.store_name = new_settings.store_name
-    settings.support_email = new_settings.support_email
-    settings.currency_symbol = new_settings.currency_symbol
-    settings.announcement_text = new_settings.announcement_text
-    settings.announcement_date = new_settings.announcement_date
-    settings.show_announcement = new_settings.show_announcement
-    settings.announcement_bar_json = new_settings.announcement_bar_json
-    settings.delivery_free_threshold = new_settings.delivery_free_threshold
-    settings.logo_url = new_settings.logo_url
-    settings.show_full_page_countdown = new_settings.show_full_page_countdown
-    settings.is_maintenance_mode = new_settings.is_maintenance_mode
-    settings.spotlight_source = new_settings.spotlight_source
-    settings.rapidshyp_enabled = new_settings.rapidshyp_enabled
-    settings.heritage_video_desktop = new_settings.heritage_video_desktop
-    settings.heritage_video_mobile = new_settings.heritage_video_mobile
-    settings.ciplx_video_desktop = new_settings.ciplx_video_desktop
-    settings.ciplx_video_mobile = new_settings.ciplx_video_mobile
-    settings.ciplx_images_json = new_settings.ciplx_images_json
-    settings.ciplx_music_url = new_settings.ciplx_music_url
-    settings.ciplx_music_volume = new_settings.ciplx_music_volume
+    # Dynamically update ALL fields from the model (except id)
+    for field_name in new_settings.__fields__:
+        if field_name == "id":
+            continue
+        setattr(settings, field_name, getattr(new_settings, field_name))
 
     session.add(settings)
     session.commit()
