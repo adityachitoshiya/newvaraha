@@ -204,7 +204,8 @@ class StoreSettings(SQLModel, table=True):
     ciplx_music_url: Optional[str] = None # Background music for slideshow
     ciplx_music_volume: float = 0.4 # Music volume (0.0 to 1.0)
     gstin: Optional[str] = "08CBRPC0024J1ZT" # Updated to real GSTIN
-    
+    favicon_url: Optional[str] = "/favicon-circle.png"  # Dynamic favicon (set from admin panel)
+
     # Dynamic Product Offers (Admin-controlled)
     mega_deal_enabled: bool = True
     mega_deal_discount_percent: int = 10

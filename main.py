@@ -78,6 +78,7 @@ def on_startup():
         from migration_add_mega_deal import run as run_mega_deal_migration
         from migration_add_heritage_cms import run as run_heritage_cms_migration
         from migration_add_slug import run_migration as run_slug_migration
+        from migration_add_favicon import run as run_favicon_migration
         
         print("🚀 Running Startup Migrations...")
         run_gender_migration()
@@ -89,6 +90,7 @@ def on_startup():
         run_mega_deal_migration()
         run_heritage_cms_migration()
         run_slug_migration()
+        run_favicon_migration()
         print("✅ Startup Migrations Completed")
     except Exception as e:
         logger.error(f"Startup Migration Failed: {e}")
