@@ -270,6 +270,117 @@ def firebase_auth(
     )
 
 
+# ============================================================================
+# GOOGLE OAUTH ENDPOINT (Google Cloud Auth — direct Google Identity Services)
+# ============================================================================
+class GoogleAuthRequest(BaseModel):
+    """Schema for Google OAuth access token request"""
+    access_token: str
+
+@router.post("/api/auth/google", response_model=FirebaseAuthResponse)
+def google_oauth_auth(
+    request: GoogleAuthRequest,
+    session: Session = Depends(get_session)
+):
+    """
+    Verify Google OAuth access token and return local JWT + user profile.
+    
+    Flow:
+    1. Frontend signs in with Google via @react-oauth/google (Google Identity Services)
+    2. Frontend sends Google access_token to this endpoint
+    3. Backend verifies by calling Google's userinfo API
+    4. Backend finds/creates user in Supabase PostgreSQL
+    5. Backend returns local JWT for subsequent API calls
+    """
+    import requests as ext_requests
+
+    # 1. Verify access token by calling Google's userinfo endpoint
+    resp = ext_requests.get(
+        "https://www.googleapis.com/oauth2/v1/userinfo",
+        params={"access_token": request.access_token},
+        timeout=10
+    )
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Google access token")
+
+    user_info = resp.json()
+
+    if user_info.get("error"):
+        raise HTTPException(status_code=401, detail="Google token verification failed")
+
+    email = user_info.get("email")
+    name = user_info.get("name") or (email.split("@")[0] if email else "User")
+    google_id = user_info.get("id")
+    picture = user_info.get("picture")
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Email not provided by Google")
+
+    print(f"✅ Google OAuth verified for: {email}")
+
+    # 2. Find or create customer in our database
+    customer = session.exec(
+        select(Customer).where(Customer.email == email)
+    ).first()
+
+    if customer:
+        # Update provider if not set
+        if not customer.provider or customer.provider == "email":
+            customer.provider = "google"
+            session.add(customer)
+            session.commit()
+            session.refresh(customer)
+    else:
+        customer = Customer(
+            full_name=name,
+            email=email,
+            provider="google",
+            is_active=True
+        )
+        session.add(customer)
+        session.commit()
+        session.refresh(customer)
+        print(f"✅ Created new customer {customer.id} from Google OAuth")
+
+    # 3. Link any guest orders to this customer
+    guest_orders = session.exec(
+        select(Order).where(
+            Order.email == email,
+            Order.user_id == None
+        )
+    ).all()
+
+    for order in guest_orders:
+        order.user_id = customer.id
+        session.add(order)
+
+    if guest_orders:
+        session.commit()
+        print(f"✅ Linked {len(guest_orders)} guest orders to customer {customer.id}")
+
+    # 4. Issue local JWT
+    access_token = create_access_token(data={
+        "sub": customer.email,
+        "role": "customer",
+        "user_id": customer.id,
+        "name": customer.full_name,
+        "customer_id": customer.id
+    })
+
+    return FirebaseAuthResponse(
+        access_token=access_token,
+        token_type="bearer",
+        user={
+            "id": customer.id,
+            "name": customer.full_name,
+            "email": customer.email,
+            "phone": customer.phone,
+            "provider": customer.provider
+        }
+    )
+
+
 @router.post("/api/admin/verify-otp", response_model=Token)
 def verify_admin_otp(data: VerifyOTP):
     username = data.username
