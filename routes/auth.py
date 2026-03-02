@@ -2,7 +2,7 @@ import os
 import random
 import requests
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Header
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 from typing import Optional, Union
@@ -15,6 +15,7 @@ from models import AdminUser, Customer, Order
 from auth_utils import verify_password, create_access_token
 from dependencies import get_current_user, oauth2_scheme
 from passlib.context import CryptContext
+from firebase_utils import verify_firebase_token
 
 router = APIRouter()
 
@@ -59,6 +60,17 @@ class SocialLogin(BaseModel):
     full_name: str
     provider: str
     provider_id: str 
+
+class FirebaseAuthRequest(BaseModel):
+    """Schema for Firebase token verification request"""
+    id_token: str
+
+class FirebaseAuthResponse(BaseModel):
+    """Response after Firebase auth verification"""
+    access_token: str
+    token_type: str = "bearer"
+    user: dict
+
 # --- Telegram Schemas ---
 class TelegramAuth(BaseModel):
     id: int
@@ -134,6 +146,129 @@ def telegram_login(data: TelegramAuth, session: Session = Depends(get_session)):
         "username": customer.full_name,
         "status": "success"
     }
+
+
+# ============================================================================
+# FIREBASE AUTH ENDPOINT (Hybrid Architecture - bypasses ISP blocks)
+# ============================================================================
+@router.post("/api/auth/firebase", response_model=FirebaseAuthResponse)
+def firebase_auth(
+    request: FirebaseAuthRequest,
+    session: Session = Depends(get_session)
+):
+    """
+    Verify Firebase ID token and return local JWT + user profile.
+    
+    Flow:
+    1. Frontend authenticates with Firebase (Google/OTP)
+    2. Frontend sends Firebase idToken to this endpoint
+    3. Backend verifies token with Firebase Admin SDK
+    4. Backend finds/creates user in Supabase PostgreSQL
+    5. Backend returns local JWT for subsequent API calls
+    """
+    # 1. Verify Firebase token
+    firebase_user = verify_firebase_token(request.id_token)
+    
+    if not firebase_user:
+        raise HTTPException(
+            status_code=401, 
+            detail="Invalid or expired Firebase token"
+        )
+    
+    firebase_uid = firebase_user.get("uid")
+    email = firebase_user.get("email")
+    name = firebase_user.get("name") or email.split("@")[0] if email else "User"
+    phone = firebase_user.get("phone_number")
+    provider = firebase_user.get("sign_in_provider", "firebase")
+    
+    # Map Firebase providers to our format
+    provider_map = {
+        "google.com": "google",
+        "phone": "phone",
+        "password": "email",
+    }
+    provider = provider_map.get(provider, provider)
+    
+    # 2. Find or create customer in our database
+    customer = None
+    
+    # First try by Firebase UID
+    customer = session.exec(
+        select(Customer).where(Customer.firebase_uid == firebase_uid)
+    ).first()
+    
+    # Then try by email (link existing account)
+    if not customer and email:
+        customer = session.exec(
+            select(Customer).where(Customer.email == email)
+        ).first()
+        
+        if customer:
+            # Link Firebase UID to existing account
+            customer.firebase_uid = firebase_uid
+            if not customer.provider or customer.provider == "email":
+                customer.provider = provider
+            session.add(customer)
+            session.commit()
+            session.refresh(customer)
+            print(f"✅ Linked Firebase UID {firebase_uid} to existing customer {customer.id}")
+    
+    # Create new customer if not found
+    if not customer:
+        # Use phone as email placeholder if email not available
+        customer_email = email or f"{phone}@phone.user" if phone else f"{firebase_uid}@firebase.user"
+        
+        customer = Customer(
+            full_name=name,
+            email=customer_email,
+            phone=phone,
+            provider=provider,
+            firebase_uid=firebase_uid,
+            is_active=True
+        )
+        session.add(customer)
+        session.commit()
+        session.refresh(customer)
+        print(f"✅ Created new customer {customer.id} from Firebase auth")
+    
+    # 3. Link any guest orders to this customer
+    if email:
+        guest_orders = session.exec(
+            select(Order).where(
+                Order.email == email,
+                Order.user_id == None
+            )
+        ).all()
+        
+        for order in guest_orders:
+            order.user_id = customer.id
+            session.add(order)
+        
+        if guest_orders:
+            session.commit()
+            print(f"✅ Linked {len(guest_orders)} guest orders to customer {customer.id}")
+    
+    # 4. Issue local JWT
+    access_token = create_access_token(data={
+        "sub": customer.email,
+        "role": "customer",
+        "user_id": customer.id,
+        "name": customer.full_name,
+        "customer_id": customer.id
+    })
+    
+    return FirebaseAuthResponse(
+        access_token=access_token,
+        token_type="bearer",
+        user={
+            "id": customer.id,
+            "name": customer.full_name,
+            "email": customer.email,
+            "phone": customer.phone,
+            "provider": customer.provider
+        }
+    )
+
 
 @router.post("/api/admin/verify-otp", response_model=Token)
 def verify_admin_otp(data: VerifyOTP):

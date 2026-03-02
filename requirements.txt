@@ -18,3 +18,4 @@ psutil
 moviepy
 boto3
 resend
+firebase-admin

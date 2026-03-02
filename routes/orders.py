@@ -347,37 +347,87 @@ def validate_promotion_restrictions(coupon_code: str, subtotal: float, payment_m
 
 @router.post("/api/create-cod-order")
 def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
-    # Extract User ID from Supabase Token
-    user_id = None
-    user_email = None
-    
-    try:
-        from supabase_utils import init_supabase
-        s_client = init_supabase()
-        if token and s_client:
-            user_data_sb = s_client.auth.get_user(token)
-            if user_data_sb and user_data_sb.user:
-                user_id = user_data_sb.user.id  # This is the UUID
-                # user_email = user_data_sb.user.email
-                # print(f"DEBUG: Creating order for User UUID: {user_id}") 
-                pass
-    except Exception as e:
-        # print(f"DEBUG: Supabase Token Check Failed: {e}")
-        # Allow order creation without user_id for guest checkout
-        pass
+    # ================================================================
+    # AUTH: Identify user from token (Local JWT or Supabase JWT)
+    # ================================================================
+    user_id = None       # Supabase UUID (for Order.user_id)
+    user_email = None    # Email from Supabase
+    local_customer = None  # Customer table record
 
-    # Guest Handling: Ensure Customer Exists
-    if not user_id:
-        existing_cust = session.exec(select(Customer).where(Customer.email == order_data.email)).first()
-        if not existing_cust:
-            # Create Guest Customer
-            new_guest = Customer(
+    # 1. Try Local JWT first (Firebase / email-password users)
+    if token:
+        try:
+            from auth_utils import ALGORITHM, SECRET_KEY
+            from jose import jwt as jose_jwt
+            payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            if payload.get("role") == "customer":
+                local_customer = session.exec(
+                    select(Customer).where(Customer.email == payload.get("sub"))
+                ).first()
+        except Exception:
+            pass  # Not a local JWT, try Supabase next
+
+    # 2. Try Supabase token (Google / social login users)
+    if token and not local_customer:
+        try:
+            from supabase_utils import init_supabase
+            s_client = init_supabase()
+            if s_client:
+                user_data_sb = s_client.auth.get_user(token)
+                if user_data_sb and user_data_sb.user:
+                    user_id = user_data_sb.user.id        # Supabase UUID
+                    user_email = user_data_sb.user.email  # Supabase email
+
+                    # Find Customer by Supabase UID
+                    local_customer = session.exec(
+                        select(Customer).where(Customer.supabase_uid == str(user_id))
+                    ).first()
+
+                    # Fallback: Find by email (old accounts without UID linked)
+                    if not local_customer and user_email:
+                        local_customer = session.exec(
+                            select(Customer).where(Customer.email == user_email)
+                        ).first()
+                        if local_customer:
+                            # Link Supabase UID to existing account
+                            local_customer.supabase_uid = str(user_id)
+                            session.add(local_customer)
+                            session.commit()
+                            session.refresh(local_customer)
+
+                    # Create Customer record if not found (Supabase user, no local record)
+                    if not local_customer:
+                        local_customer = Customer(
+                            full_name=order_data.name,
+                            email=user_email or order_data.email,
+                            phone=order_data.contact,
+                            provider="google",
+                            supabase_uid=str(user_id),
+                            is_active=True
+                        )
+                        session.add(local_customer)
+                        session.commit()
+                        session.refresh(local_customer)
+                        print(f"✅ Created Customer for Supabase user: {local_customer.id}")
+        except Exception as e:
+            # Allow order creation without user_id for guest checkout
+            print(f"Auth token check: {e}")
+            pass
+
+    # 3. Guest fallback — find or create Customer by email
+    if not local_customer:
+        local_customer = session.exec(
+            select(Customer).where(Customer.email == order_data.email)
+        ).first()
+        if not local_customer:
+            local_customer = Customer(
                 full_name=order_data.name,
                 email=order_data.email,
+                phone=order_data.contact,
                 provider="guest",
                 is_active=True
             )
-            session.add(new_guest)
+            session.add(local_customer)
             session.commit()
 
     # Generate Order ID
@@ -463,7 +513,48 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
     
     # Deduct Stock for ordered items
     deduct_stock_for_items(items_list, session)
-    
+
+    # ================================================================
+    # AUTO-SAVE ADDRESS to Address Book for logged-in users
+    # (Supabase users + Firebase users — NOT guests)
+    # ================================================================
+    is_logged_in_user = local_customer and local_customer.provider != "guest"
+    if is_logged_in_user:
+        try:
+            from models import Address
+            # Save only if this address doesn't already exist for this customer
+            existing_addr = session.exec(
+                select(Address).where(
+                    Address.customer_id == local_customer.id,
+                    Address.pincode == order_data.pincode,
+                    Address.address_line1 == order_data.address
+                )
+            ).first()
+
+            if not existing_addr:
+                # First address ever? Make it default
+                has_any_address = session.exec(
+                    select(Address).where(Address.customer_id == local_customer.id)
+                ).first()
+
+                new_addr = Address(
+                    customer_id=local_customer.id,
+                    label="Home",
+                    full_name=order_data.name,
+                    phone=order_data.contact,
+                    address_line1=order_data.address,
+                    city=order_data.city,
+                    state=order_data.state or "Rajasthan",
+                    pincode=order_data.pincode,
+                    is_default=(not has_any_address),  # First = default
+                    address_type="both"
+                )
+                session.add(new_addr)
+                session.commit()
+                print(f"✅ Address auto-saved for customer {local_customer.id}")
+        except Exception as e:
+            print(f"⚠️ Address auto-save failed (non-blocking): {e}")
+
     # Notify
     background_tasks.add_task(send_order_notifications, new_order.dict())
     
@@ -1253,35 +1344,58 @@ def read_order(order_id: str, token: Optional[str] = Depends(oauth2_scheme), ses
         raise HTTPException(status_code=404, detail="Order not found")
     
     # 🔒 AUTH CHECK: Verify the requesting user owns this order or is admin
-    user_id = None
     is_admin = False
+    customer_email = None   # From local JWT (Firebase / email users)
+    supabase_user_id = None # From Supabase JWT
+
     if token:
+        # 1. Try local JWT (Firebase / email-password users)
         try:
             from jose import jwt as jose_jwt
             from auth_utils import SECRET_KEY, ALGORITHM
             payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            if payload.get("role") == "admin":
+            role = payload.get("role")
+            if role == "admin":
                 is_admin = True
+            elif role == "customer":
+                customer_email = payload.get("sub")  # email stored in 'sub'
         except Exception:
             pass
-        
-        if not is_admin:
+
+        # 2. Try Supabase JWT (Google / social login users)
+        if not is_admin and not customer_email:
             try:
                 from supabase_utils import init_supabase
                 s_client = init_supabase()
                 if s_client:
                     user_data = s_client.auth.get_user(token)
                     if user_data and user_data.user:
-                        user_id = user_data.user.id
+                        supabase_user_id = user_data.user.id
+                        customer_email = user_data.user.email
             except Exception:
                 pass
-    
-    # Allow: admin, or order owner (by user_id or email match)
+
+    # Allow: admin, or order owner (by supabase UUID, email, or guest — no token)
     if not is_admin:
-        if not user_id and not token:
-            raise HTTPException(status_code=401, detail="Authentication required")
-        if order.user_id and user_id and str(order.user_id) != str(user_id):
-            raise HTTPException(status_code=403, detail="Not authorized to view this order")
+        if not token:
+            # Guest access: allow by order ID only (no token, no restriction)
+            # This allows order confirmation page to work for guests
+            pass
+        else:
+            # Logged-in user: must match by email or supabase UUID
+            if not customer_email and not supabase_user_id:
+                raise HTTPException(status_code=401, detail="Authentication required")
+
+            # Check Supabase UUID ownership
+            if order.user_id and supabase_user_id and str(order.user_id) != str(supabase_user_id):
+                raise HTTPException(status_code=403, detail="Not authorized to view this order")
+
+            # Check email ownership (covers local JWT users and email-based orders)
+            if customer_email and order.email and order.email != customer_email:
+                # Only reject if order also has a user_id (strong ownership signal)
+                # Otherwise allow — guest order retrieved by logged-in user with same email
+                if order.user_id:
+                    raise HTTPException(status_code=403, detail="Not authorized to view this order")
     
     return order
 

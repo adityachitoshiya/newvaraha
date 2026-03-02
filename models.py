@@ -116,10 +116,12 @@ class Customer(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     full_name: str
     email: str = Field(index=True, unique=True)
+    phone: Optional[str] = None  # For phone-based Firebase auth
     hashed_password: Optional[str] = None # Nullable for social login
-    provider: str = "email" # email, google, facebook
+    provider: str = "email" # email, google, facebook, phone
     telegram_id: Optional[str] = None # For Telegram Login
     supabase_uid: Optional[str] = Field(default=None, index=True, unique=True) # Link to Supabase Auth UUID
+    firebase_uid: Optional[str] = Field(default=None, index=True, unique=True) # Link to Firebase Auth UID
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
