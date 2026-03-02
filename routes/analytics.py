@@ -44,6 +44,10 @@ async def track_visit(
     visit_data: VisitRequest,
     session: Session = Depends(get_session)
 ):
+    # Reject Next.js template paths like /product/[slug]
+    if '[' in visit_data.path or ']' in visit_data.path:
+        return {"status": "skipped", "reason": "template_path"}
+
     # Get Client IP
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
@@ -181,6 +185,14 @@ def get_geo_analytics(session: Session = Depends(get_session)):
         "top_countries": top_countries,
         "top_cities": top_cities
     }
+
+
+@router.delete("/api/analytics/clean-template-paths")
+def clean_template_paths(session: Session = Depends(get_session)):
+    """Remove all visitor logs with Next.js template paths like /product/[slug]"""
+    result = session.exec(text("DELETE FROM visitorlog WHERE path LIKE '%[%' OR path LIKE '%]%'"))
+    session.commit()
+    return {"status": "success", "deleted": result.rowcount}
 
 
 @router.get("/api/analytics/logs")
