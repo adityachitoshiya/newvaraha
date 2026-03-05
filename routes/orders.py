@@ -487,6 +487,8 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
         city=order_data.city,
         pincode=order_data.pincode,
         total_amount=final_amount,
+        original_amount=verified_amount + coupon_discount,  # pre-coupon server-verified amount
+        discount_amount=coupon_discount,                    # coupon discount applied
         payment_method="cod",
         status="pending",
         user_id=uuid.UUID(user_id) if user_id else None,
@@ -503,7 +505,7 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
         status_history=json.dumps([{
             "status": "pending",
             "timestamp": datetime.utcnow().isoformat(),
-            "comment": "Order placed via COD"
+            "comment": "Order placed via COD" + (f" | Coupon: {order_data.couponCode} (-₹{coupon_discount})" if coupon_discount > 0 else "")
         }])
     )
     
@@ -610,7 +612,11 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
     # 2. Initialize Provider
     if gateway.provider == "razorpay":
         try:
-            client = razorpay.Client(auth=(creds.get("key_id"), creds.get("key_secret")))
+            key_id = (creds.get("key_id") or "").strip()
+            key_secret = (creds.get("key_secret") or "").strip()
+            if not key_id or key_id == "undefined" or not key_secret or key_secret == "undefined":
+                raise HTTPException(status_code=400, detail="Razorpay credentials are not configured. Please set your Key ID and Key Secret in Admin → Settings → Payment Gateways.")
+            client = razorpay.Client(auth=(key_id, key_secret))
             
             notes = {
                 "email": order_data.email,
@@ -633,7 +639,7 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
                 "orderId": razorpay_order['id'], # Added alias for frontend compatibility
                 "amount": razorpay_order['amount'],
                 "currency": razorpay_order['currency'],
-                "key": creds.get("key_id"), 
+                "key": key_id,
                 "name": "Varaha Jewels",
                 "description": "Payment for Order",
                 "prefill": {
@@ -1052,13 +1058,23 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
                 "price": order_data.get('amount')
             }]
         
+        # 🔒 SERVER-SIDE PRICE RECALCULATION
+        pp_verified_amount = recalculate_amount_server_side(items, session) if items else order_data.get('amount', 0)
+
+        # 🔒 SERVER-SIDE COUPON VALIDATION
+        pp_coupon_code = order_data.get('couponCode', '') or ''
+        pp_coupon_discount = validate_coupon_server_side(pp_coupon_code, pp_verified_amount, session)
+        pp_verified_after_coupon = max(0, pp_verified_amount - pp_coupon_discount)
+
         # Calculate Tax
         state_input = order_data.get('state', '')
-        tax_data = calculate_tax_breakdown(order_data.get('amount', 0), state_input)
-        
-        # Calculate Prepaid Discount (if enabled)
-        prepaid_discount = calculate_prepaid_discount(order_data.get('amount', 0), 'online', session)
-        final_amount = order_data.get('amount', 0) - prepaid_discount
+
+        # Calculate Prepaid Discount (if enabled) on post-coupon amount
+        prepaid_discount = calculate_prepaid_discount(pp_verified_after_coupon, 'online', session)
+        final_amount = pp_verified_after_coupon - prepaid_discount
+
+        total_discount = pp_coupon_discount + prepaid_discount
+        tax_data = calculate_tax_breakdown(final_amount, state_input)
         
         # Create Order
         new_order = Order(
@@ -1069,9 +1085,9 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
             address=order_data.get('address'),
             city=order_data.get('city'),
             pincode=order_data.get('pincode'),
-            total_amount=final_amount,  # Apply discount
-            original_amount=order_data.get('amount', 0),  # Store original
-            discount_amount=prepaid_discount,  # Store discount
+            total_amount=final_amount,
+            original_amount=pp_verified_amount,   # pre-coupon server-verified amount
+            discount_amount=total_discount,        # coupon + prepaid discount
             payment_method="online",
             status="paid",
             email_status="pending",
@@ -1086,7 +1102,9 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
             status_history=json.dumps([{
                 "status": "paid",
                 "timestamp": datetime.utcnow().isoformat(),
-                "comment": f"Payment via PhonePe. TxnID: {transaction_id}" + (f" | Prepaid Discount: ₹{prepaid_discount}" if prepaid_discount > 0 else "")
+                "comment": f"Payment via PhonePe. TxnID: {transaction_id}"
+                    + (f" | Coupon: {pp_coupon_code} (-₹{pp_coupon_discount})" if pp_coupon_discount > 0 else "")
+                    + (f" | Prepaid Discount: ₹{prepaid_discount}" if prepaid_discount > 0 else "")
             }])
         )
         
@@ -1227,11 +1245,23 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
         state_input = order_data.get('state', '')
         # If state not in order_data, try to extract from address? No, assume frontend sends it.
         # Fallback to empty string which defaults to IGST
-        tax_data = calculate_tax_breakdown(order_data.get('amount'), state_input)
-        
-        # Calculate Prepaid Discount (if enabled)
-        prepaid_discount = calculate_prepaid_discount(order_data.get('amount'), 'online', session)
-        final_amount = order_data.get('amount') - prepaid_discount
+
+        # 🔒 SERVER-SIDE PRICE RECALCULATION — never trust frontend amounts
+        rzp_items = items if items else []
+        rzp_verified_amount = recalculate_amount_server_side(rzp_items, session) if rzp_items else order_data.get('amount', 0)
+
+        # 🔒 SERVER-SIDE COUPON VALIDATION
+        rzp_coupon_code = order_data.get('couponCode', '') or ''
+        rzp_coupon_discount = validate_coupon_server_side(rzp_coupon_code, rzp_verified_amount, session)
+        rzp_verified_amount_after_coupon = max(0, rzp_verified_amount - rzp_coupon_discount)
+
+        # Calculate Prepaid Discount (if enabled) on post-coupon amount
+        prepaid_discount = calculate_prepaid_discount(rzp_verified_amount_after_coupon, 'online', session)
+        final_amount = rzp_verified_amount_after_coupon - prepaid_discount
+
+        total_discount = rzp_coupon_discount + prepaid_discount
+
+        tax_data = calculate_tax_breakdown(final_amount, state_input)
 
         new_order = Order(
             order_id=f"ORD-{razorpay_order_id.replace('order_', '')}" if razorpay_order_id else f"ORD-{int(time.time())}",
@@ -1241,12 +1271,12 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
             address=order_data.get('address'),
             city=order_data.get('city'),
             pincode=order_data.get('pincode'),
-            total_amount=final_amount,  # Apply discount
-            original_amount=order_data.get('amount'),  # Store original
-            discount_amount=prepaid_discount,  # Store discount
+            total_amount=final_amount,
+            original_amount=rzp_verified_amount,   # pre-coupon server-verified amount
+            discount_amount=total_discount,          # coupon + prepaid discount
             payment_method="online",
             status="paid",
-            email_status="pending", # Explicitly set default
+            email_status="pending",
             user_id=uuid.UUID(user_id) if user_id else None,
             items_json=json.dumps(items),
             
@@ -1261,7 +1291,9 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
             status_history=json.dumps([{
                 "status": "paid",
                 "timestamp": datetime.utcnow().isoformat(),
-                "comment": f"Payment Successful. Ref: {razorpay_payment_id}" + (f" | Prepaid Discount: ₹{prepaid_discount}" if prepaid_discount > 0 else "")
+                "comment": f"Payment Successful. Ref: {razorpay_payment_id}"
+                    + (f" | Coupon: {rzp_coupon_code} (-₹{rzp_coupon_discount})" if rzp_coupon_discount > 0 else "")
+                    + (f" | Prepaid Discount: ₹{prepaid_discount}" if prepaid_discount > 0 else "")
             }])
         )
         

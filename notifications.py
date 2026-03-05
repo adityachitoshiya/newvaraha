@@ -57,7 +57,7 @@ def send_order_notifications(order_data):
                 items_for_subject = json.loads(order_data['items_json'])
             except:
                 items_for_subject = []
-        product_names = ', '.join([item.get('name', '') for item in items_for_subject if item.get('name')]) or 'Your Varaha Order'
+        product_names = ', '.join([item.get('productName', item.get('name', '')) for item in items_for_subject if item.get('productName') or item.get('name')]) or 'Your Varaha Order'
         # Truncate if too long
         if len(product_names) > 60:
             product_names = product_names[:57] + '...'
@@ -100,11 +100,12 @@ def send_order_notifications(order_data):
             if items:
                 items_html += '<table style="width: 100%; border-collapse: collapse;">'
                 for item in items:
-                    name = item.get('name', 'Product')
+                    name = item.get('productName', item.get('name', 'Product'))
+                    qty = item.get('quantity', 1)
                     price = item.get('price', 0)
                     items_html += f"""
                         <tr>
-                            <td style="padding: 10px 0; border-bottom: 1px dashed #e0d8c3; color: #1a1a1a; font-family: 'Georgia', serif; font-size: 16px;">{name}</td>
+                            <td style="padding: 10px 0; border-bottom: 1px dashed #e0d8c3; color: #1a1a1a; font-family: 'Georgia', serif; font-size: 16px;">{name}{f' x{qty}' if qty > 1 else ''}</td>
                             <td style="padding: 10px 0; border-bottom: 1px dashed #e0d8c3; text-align: right; color: #444; font-family: 'Helvetica', sans-serif; font-size: 15px;">₹{price}</td>
                         </tr>
                     """
@@ -299,11 +300,11 @@ def send_order_notifications(order_data):
             try:
                 r_admin = resend.Emails.send({
                     "from": f"Varaha Jewels <{sender_alias}>" if '@' in sender_alias else "onboarding@resend.dev", # Resend requires verified domain or onboarding email
-                    "to": admin_email,
+                    "to": [admin_email],
                     "subject": subject_admin,
                     "html": body_admin
                 })
-                logger.info(f"Resend: Admin notification sent. ID: {r_admin.get('id')}")
+                logger.info(f"Resend: Admin notification sent. ID: {r_admin.id}")
             except Exception as e:
                 logger.error(f"Resend Error (Admin): {str(e)}")
 
@@ -312,11 +313,11 @@ def send_order_notifications(order_data):
                 try:
                     r_customer = resend.Emails.send({
                         "from": f"Varaha Jewels <{sender_alias}>" if '@' in sender_alias else "onboarding@resend.dev",
-                        "to": customer_email,
+                        "to": [customer_email],
                         "subject": subject_customer,
                         "html": body_customer
                     })
-                    logger.info(f"Resend: Customer confirmation sent. ID: {r_customer.get('id')}")
+                    logger.info(f"Resend: Customer confirmation sent. ID: {r_customer.id}")
 
                     # UPDATE DB STATUS: SUCCESS
                     with Session(engine) as session:
@@ -560,11 +561,11 @@ def send_shipping_notifications(order_data):
             resend.api_key = resend_api_key
             r = resend.Emails.send({
                 "from": f"Varaha Jewels <{sender_alias}>" if '@' in sender_alias else "onboarding@resend.dev",
-                "to": customer_email,
+                "to": [customer_email],
                 "subject": subject,
                 "html": body_html
             })
-            logger.info(f"Shipping email sent via Resend. ID: {r.get('id')}")
+            logger.info(f"Shipping email sent via Resend. ID: {r.id}")
             
         else:
             logger.warning("Shipping email skipped: Provider not Resend or keys missing.")
@@ -697,11 +698,11 @@ def send_tracking_notification(order, status: str):
             resend.api_key = resend_api_key
             result = resend.Emails.send({
                 "from": f"Varaha Jewels <{sender_alias}>" if sender_alias and '@' in sender_alias else "onboarding@resend.dev",
-                "to": customer_email,
+                "to": [customer_email],
                 "subject": subject,
                 "html": body_html
             })
-            logger.info(f"Tracking notification ({status}) sent to {customer_email}. ID: {result.get('id')}")
+            logger.info(f"Tracking notification ({status}) sent to {customer_email}. ID: {result.id}")
         else:
             logger.warning(f"Tracking notification skipped: Provider not configured")
             
