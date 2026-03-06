@@ -51,8 +51,6 @@ origins = [
     "https://varahajewels-versel.vercel.app", # Just in case
 ]
 
-app.add_middleware(MonitoringMiddleware)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -62,6 +60,8 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"]
 )
+
+app.add_middleware(MonitoringMiddleware)
 
 @app.on_event("startup")
 def on_startup():
