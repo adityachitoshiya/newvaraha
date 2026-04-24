@@ -1280,24 +1280,38 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
         # --- LOGIC UPDATE: Prioritize Logged-in User ---
         user_id = None
         
-        # 1. Try to get User ID from Token (If request came from Frontend with Auth)
-        try:
-            if token:
+        # 1a. Try Local JWT first (Firebase / email-password users) — instant, no network call
+        if token:
+            try:
+                from auth_utils import ALGORITHM, SECRET_KEY
+                from jose import jwt as jose_jwt
+                payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+                if payload.get("role") == "customer":
+                    local_cust = session.exec(
+                        select(Customer).where(Customer.email == payload.get("sub"))
+                    ).first()
+                    if local_cust and local_cust.supabase_uid:
+                        user_id = local_cust.supabase_uid
+                        print(f"DEBUG: Order linked via Local JWT: {user_id}")
+            except Exception:
+                pass  # Not a local JWT, try Supabase next
+
+        # 1b. Try Supabase token (Google / social login users)
+        if not user_id and token:
+            try:
                 from supabase_utils import init_supabase
                 s_client = init_supabase()
                 if s_client:
                     user_data_sb = s_client.auth.get_user(token)
                     if user_data_sb and user_data_sb.user:
                         user_id = user_data_sb.user.id
-                        print(f"DEBUG: Order linked to Logged-in User UUID: {user_id}")
-        except Exception as e:
-            print(f"DEBUG: Token check failed in callback: {e}")
+                        print(f"DEBUG: Order linked to Supabase User UUID: {user_id}")
+            except Exception as e:
+                print(f"DEBUG: Token check failed in callback: {e}")
 
-        # 2. Fallback: Try to get user_id from Razorpay Notes (Secure - set during checkout session)
+        # 2. Fallback: Try to get user_id from Razorpay Notes (only if token didn't work)
         if not user_id:
             try:
-                # Fetch the order from Razorpay to get the notes
-                # client is already initialized above
                 rzp_order_details = client.order.fetch(razorpay_order_id)
                 if rzp_order_details and 'notes' in rzp_order_details:
                      notes_uid = rzp_order_details['notes'].get('user_id')
@@ -1305,7 +1319,7 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
                          user_id = notes_uid
                          print(f"DEBUG: Found user_id in Razorpay Notes: {user_id}")
             except Exception as e:
-                print(f"DEBUG: Failed to fetch Razorpay notes: {e}")
+                print(f"DEBUG: Razorpay notes fetch skipped/failed: {e}")
 
         # 3. Guest Handling: Create Guest Customer if no user_id found (same as COD flow)
         if not user_id:
