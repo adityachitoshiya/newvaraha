@@ -1,0 +1,70 @@
+from sqlmodel import create_engine, SQLModel, Session
+import os
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Explicitly load .env from backend folder
+env_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=env_path)
+
+# Check for DATABASE_URL environment variable (used by AWS/Render/Heroku)
+database_url = os.getenv("DATABASE_URL")
+
+if not database_url:
+    raise ValueError("CRITICAL: DATABASE_URL is not set. Local storage is disabled. Please configure Supabase.")
+
+# PostgreSQL requires the URL to start with postgresql:// instead of postgres://
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+connect_args = {}
+
+# Only use check_same_thread for SQLite
+if "sqlite" in database_url:
+    connect_args["check_same_thread"] = False
+
+# Mask password for logging
+masked_url = database_url
+if ":" in database_url and "@" in database_url:
+    # Basic masking logic
+    try:
+        prefix, rest = database_url.split("://")
+        auth, host_port_db = rest.split("@")
+        user, _ = auth.split(":")
+        masked_url = f"{prefix}://{user}:****@{host_port_db}"
+    except:
+        pass
+
+print(f"🔌 Database Connection: {masked_url}")
+
+if "sqlite" in database_url:
+    print("⚠️  WARNING: Using local SQLite database. Data will NOT be synced to Supabase.")
+    connect_args["check_same_thread"] = False
+    engine = create_engine(database_url, echo=True, connect_args=connect_args)
+else:
+    print("✅ Using Remote Database (Supabase/PostgreSQL)")
+    
+    # TCP Keepalive to prevent connection drops by intermediate firewalls/proxies
+    connect_args["keepalives"] = 1
+    connect_args["keepalives_idle"] = 30
+    connect_args["keepalives_interval"] = 10
+    connect_args["keepalives_count"] = 5
+
+    # Optimize connection pool for remote DB to prevent timeouts
+    engine = create_engine(
+        database_url, 
+        echo=True, 
+        connect_args=connect_args,
+        pool_pre_ping=True, 
+        pool_recycle=280, # Recycle before Supabase's 5-minute idle timeout
+        pool_timeout=30,  # Prevent indefinite blocking
+        pool_size=10, 
+        max_overflow=20
+    )
+
+def create_db_and_tables():
+    SQLModel.metadata.create_all(engine)
+
+def get_session():
+    with Session(engine) as session:
+        yield session
