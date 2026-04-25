@@ -26,7 +26,8 @@ from models import (
     Customer, Review, Coupon, VisitorLog, HeroSlide, CreatorVideo,
     StoreSettings, ActiveVisitor, Promotion, Cart, CartItem, Wishlist,
     Address, ProductVariant, Inventory, OrderReturn, MetalRates,
-    SystemSetting, FlashPincode, BlockedRegion, VerificationCode
+    SystemSetting, FlashPincode, BlockedRegion, VerificationCode,
+    BlogPost
 )
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -336,6 +337,18 @@ TABLE_COLUMNS = {
         ("expires_at", "TIMESTAMP", "NOT NULL DEFAULT NOW()"),
         ("created_at", "TIMESTAMP", "DEFAULT NOW()"),
         ("attempts", "INTEGER", "DEFAULT 0"),
+    ],
+    "blogpost": [
+        ("title", "VARCHAR", "NOT NULL DEFAULT ''"),
+        ("slug", "VARCHAR", "NOT NULL DEFAULT ''"),
+        ("content", "TEXT", "DEFAULT ''"),
+        ("excerpt", "TEXT", ""),
+        ("cover_image", "VARCHAR", ""),
+        ("author", "VARCHAR", "DEFAULT 'Varaha Jewels'"),
+        ("tags", "TEXT", "DEFAULT '[]'"),
+        ("is_published", "BOOLEAN", "DEFAULT FALSE"),
+        ("created_at", "TIMESTAMP", "DEFAULT NOW()"),
+        ("updated_at", "TIMESTAMP", "DEFAULT NOW()"),
     ],
 }
 

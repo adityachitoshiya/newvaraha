@@ -378,3 +378,22 @@ class VerificationCode(SQLModel, table=True):
     expires_at: datetime
     created_at: datetime = Field(default_factory=datetime.utcnow)
     attempts: int = 0
+
+
+# ==========================================
+# 📝 BLOG POST MODEL  
+# ==========================================
+
+class BlogPost(SQLModel, table=True):
+    """Blog posts for Varaha Jewels"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    title: str
+    slug: str = Field(index=True, unique=True)
+    content: str = ""  # HTML content
+    excerpt: Optional[str] = None  # Short summary for listing
+    cover_image: Optional[str] = None  # Cloudinary URL
+    author: str = "Varaha Jewels"
+    tags: str = "[]"  # JSON array of tag strings
+    is_published: bool = False  # Draft vs Published
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
