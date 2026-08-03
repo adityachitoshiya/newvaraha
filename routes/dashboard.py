@@ -186,7 +186,7 @@ async def dashboard_ui(request: Request, session: Session = Depends(get_session)
         <div class="container">
             <header>
                 <div style="display:flex; align-items:center; gap:15px;">
-                     <img src="https://newvaraha-nwbd.vercel.app/varaha-assets/logo.png" height="40" style="filter: brightness(2);">
+                     <img src="https://res.cloudinary.com/dd5zrsmok/image/upload/v1766342264/logo_hvef6t.png" height="40" style="filter: brightness(2);">
                      <h1>System Dashboard</h1>
                 </div>
                 <div class="badge">

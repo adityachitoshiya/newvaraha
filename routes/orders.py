@@ -189,11 +189,12 @@ def calculate_prepaid_discount(base_amount: float, payment_method: str, session:
 
 def deduct_stock_for_items(items: list, order_id: str, session: Session):
     """
-    Deduct stock for each item in the order AND write an InventoryLog entry (Fix #4).
+    Deduct stock for each item in the order AND write an Inventory entry (Fix #4).
     items: List of dicts with 'productId' and 'quantity' keys.
     Should be called AFTER order is successfully created.
     """
-    from models import Product, InventoryLog
+    from models import Product, Inventory
+    from sqlmodel import update
 
     for item in items:
         product_id = item.get("productId")
@@ -202,14 +203,26 @@ def deduct_stock_for_items(items: list, order_id: str, session: Session):
         if not product_id:
             continue
 
-        product = session.get(Product, product_id)
-        if product and product.stock is not None:
-            old_stock = product.stock
-            product.stock = max(0, product.stock - quantity)
-            session.add(product)
+        result = session.exec(
+            update(Product)
+            .where(Product.id == product_id, Product.stock >= quantity)
+            .values(stock=Product.stock - quantity)
+        )
+        if result.rowcount == 0:
+            print(f"🚨 OVERSELL BLOCKED: {product_id} insufficient stock for order {order_id}")
+            try:
+                from notifications import send_telegram_alert
+                send_telegram_alert(f"Oversell attempt: {product_id} on order {order_id} — manual review needed")
+            except Exception as e:
+                print(f"Failed to send telegram alert for oversell: {e}")
+            continue
 
+        product = session.get(Product, product_id)
+        if product:
+            session.refresh(product)  # guarantee latest stock from DB
+        if product and product.stock is not None:
             # Fix #4 — Inventory audit log
-            log = InventoryLog(
+            log = Inventory(
                 product_id=product_id,
                 change_qty=-quantity,
                 reason="order",
@@ -217,7 +230,7 @@ def deduct_stock_for_items(items: list, order_id: str, session: Session):
                 stock_after=product.stock,
             )
             session.add(log)
-            print(f"📦 Stock Update: {product_id} -> {old_stock} → {product.stock} (deducted {quantity})")
+            print(f"📦 Stock Update: {product_id} → {product.stock} (deducted {quantity})")
 
     session.commit()
 
@@ -330,6 +343,10 @@ def recalculate_amount_server_side(items: list, session: Session) -> float:
         if product.mrp is not None and price > product.mrp:
             print(f"⚠️ PRICE INTEGRITY: Product {product_id} price ({price}) > MRP ({product.mrp}). Using MRP.")
             price = product.mrp
+            
+        # 🔒 SECURITY: Overwrite the frontend-supplied price with the DB-verified price
+        # This ensures items_json always reflects the actual charged price
+        item["price"] = price
         
         total += price * quantity
         print(f"🧮 Price calc: {product_id} × {quantity} @ ₹{price} = ₹{price * quantity}")
@@ -619,18 +636,8 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
         }]
 
     # 🔒 SERVER-SIDE PRICE RECALCULATION — never trust frontend amounts
+    # This function ALSO mutates items_list to sync item["price"] with DB-verified prices
     verified_amount = recalculate_amount_server_side(items_list, session)
-
-    # 🔒 SYNC: Update item prices in items_list to match DB-verified prices
-    # This ensures items_json (stored in DB) shows correct prices matching total_amount
-    from models import Product as ProductSync
-    for item in items_list:
-        pid = item.get("productId")
-        if not pid:
-            continue
-        prod = session.get(ProductSync, pid)
-        if prod:
-            item["price"] = prod.price if prod.price is not None else 0
 
     # REGION BLOCK CHECK - reject orders for blocked delivery states
     validate_delivery_state_not_blocked(order_data.state, session)
@@ -705,7 +712,7 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
     session.commit()
     session.refresh(new_order)
 
-    # Deduct Stock for ordered items + write InventoryLog (Fix #4)
+    # Deduct Stock for ordered items + write Inventory (Fix #4)
     deduct_stock_for_items(items_list, new_order.order_id, session)
 
     # Increment coupon usage count (Fix #3)
@@ -754,7 +761,7 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
             print(f"⚠️ Address auto-save failed (non-blocking): {e}")
 
     # Notify
-    background_tasks.add_task(send_order_notifications, new_order.model_dump())
+    background_tasks.add_task(send_order_notifications, new_order.order_id)
     
     return {"ok": True, "orderId": new_order.order_id}
 
@@ -781,8 +788,8 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
     creds = json.loads(gateway.credentials_json)
 
     # 🔴 STOCK VALIDATION — check before creating payment session
+    from models import Product as ProductModel
     if order_data.items:
-        from models import Product as ProductModel
         for item in order_data.items:
             product = session.get(ProductModel, item.productId)
             if product:
@@ -790,6 +797,14 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
                     raise HTTPException(status_code=400, detail=f"{product.name} is out of stock")
                 if product.stock is not None and item.quantity > product.stock:
                     raise HTTPException(status_code=400, detail=f"{product.name}: only {product.stock} left in stock")
+    elif order_data.productId:
+        product = session.get(ProductModel, order_data.productId)
+        qty = order_data.quantity or 1
+        if product:
+            if product.stock is not None and product.stock <= 0:
+                raise HTTPException(status_code=400, detail=f"{product.name} is out of stock")
+            if product.stock is not None and qty > product.stock:
+                raise HTTPException(status_code=400, detail=f"{product.name}: only {product.stock} left in stock")
 
     # 🔒 SERVER-SIDE PRICE RECALCULATION for payment session
     items_for_calc = []
@@ -1292,6 +1307,9 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
         total_discount = pp_coupon_discount + prepaid_discount
         tax_data = calculate_tax_breakdown(final_amount, state_input)
         
+        # PhonePe Fix: validate coupon usage limit before creating order
+        validate_coupon_usage_limit(pp_coupon_code, order_data.get('email', ''), session)
+        
         # Create Order
         new_order = Order(
             order_id=transaction_id,
@@ -1328,11 +1346,15 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
         session.commit()
         session.refresh(new_order)
 
-        # Fix #4 — Deduct stock + InventoryLog
+        # Fix #4 — Deduct stock + Inventory
         deduct_stock_for_items(items, new_order.order_id, session)
         
+        # PhonePe Fix: increment coupon usage
+        if pp_coupon_code and pp_coupon_discount > 0:
+            increment_coupon_usage(pp_coupon_code, order_data.get('email', ''), new_order.order_id, session)
+        
         # Send notifications
-        background_tasks.add_task(send_order_notifications, new_order.model_dump())
+        background_tasks.add_task(send_order_notifications, new_order.order_id)
         
         print(f"DEBUG PhonePe: Order {new_order.order_id} created successfully")
         
@@ -1387,6 +1409,13 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
             print(f"Signature Verification Failed: {e}")
             raise HTTPException(status_code=400, detail="Invalid Payment Signature")
              
+        # Razorpay Fix: Check for duplicate order to ensure idempotency
+        computed_order_id = f"ORD-{razorpay_order_id.replace('order_', '')}" if razorpay_order_id else f"ORD-{int(time.time())}"
+        existing_order = session.exec(select(Order).where(Order.order_id == computed_order_id)).first()
+        if existing_order:
+            print(f"DEBUG Razorpay: Order {computed_order_id} already exists, skipping duplicate creation")
+            return {"ok": True, "orderId": existing_order.order_id, "message": "Order already exists"}
+
         # Create the actual order in DB now that payment is VERIFIED
         # Or update if we created it as 'awaiting_payment' earlier.
         # Logic: Create new order as 'paid'
@@ -1511,7 +1540,7 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
         validate_coupon_usage_limit(rzp_coupon_code, order_data.get('email', ''), session)
 
         new_order = Order(
-            order_id=f"ORD-{razorpay_order_id.replace('order_', '')}" if razorpay_order_id else f"ORD-{int(time.time())}",
+            order_id=computed_order_id,
             customer_name=order_data.get('name'),
             email=order_data.get('email'),
             phone=order_data.get('contact'),
@@ -1549,7 +1578,7 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
         session.commit()
         session.refresh(new_order)
 
-        # Fix #4 — Deduct stock + InventoryLog
+        # Fix #4 — Deduct stock + Inventory
         deduct_stock_for_items(items, new_order.order_id, session)
 
         # Fix #3 — Increment coupon usage
@@ -1573,7 +1602,7 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
         except Exception as txn_err:
             print(f"⚠️ PaymentTransaction log failed (non-blocking): {txn_err}")
 
-        background_tasks.add_task(send_order_notifications, new_order.model_dump())
+        background_tasks.add_task(send_order_notifications, new_order.order_id)
 
         return {"ok": True, "orderId": new_order.order_id}
 
@@ -1590,7 +1619,7 @@ def create_order(order: Order, background_tasks: BackgroundTasks, current_user: 
         session.refresh(order)
         
         # Send notifications in background
-        background_tasks.add_task(send_order_notifications, order.model_dump())
+        background_tasks.add_task(send_order_notifications, order.order_id)
         
         return order
     except Exception as e:

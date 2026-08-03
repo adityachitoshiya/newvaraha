@@ -392,25 +392,33 @@ def lookup_orders_for_tracking(payload: TrackLookupRequest, session: Session = D
     No authentication required.
     """
     email = (payload.email or "").strip().lower()
-    phone = (payload.phone or "").strip()
+    raw_phone = (payload.phone or "").strip()
     
-    if not email and not phone:
+    if not email and not raw_phone:
         raise HTTPException(status_code=400, detail="Please provide email or phone number")
     
+    clean_phone = ""
+    if raw_phone:
+        clean_phone = ''.join(filter(str.isdigit, raw_phone))
+        if len(clean_phone) >= 10:
+            clean_phone = clean_phone[-10:]
+        else:
+            clean_phone = raw_phone
+            
     # Build query — match by email OR phone
-    if email and phone:
-        orders = session.exec(
+    if email and clean_phone:
+        print(f"CLEAN PHONE: {clean_phone}"); orders = session.exec(
             select(Order).where(
-                (Order.email == email) | (Order.phone == phone)
+                (Order.email == email) | (Order.phone.contains(clean_phone))
             ).order_by(Order.created_at.desc())  # type: ignore
         ).all()
     elif email:
-        orders = session.exec(
+        print(f"CLEAN PHONE: {clean_phone}"); orders = session.exec(
             select(Order).where(Order.email == email).order_by(Order.created_at.desc())  # type: ignore
         ).all()
     else:
-        orders = session.exec(
-            select(Order).where(Order.phone == phone).order_by(Order.created_at.desc())  # type: ignore
+        print(f"CLEAN PHONE: {clean_phone}"); orders = session.exec(
+            select(Order).where(Order.phone.contains(clean_phone)).order_by(Order.created_at.desc())  # type: ignore
         ).all()
     
     if not orders:

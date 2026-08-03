@@ -17,13 +17,23 @@ from database import engine
 from sqlmodel import Session, select
 from models import Order
 
-def send_order_notifications(order_data):
+def send_order_notifications(order_data_or_id):
     """
     Triggers email and Telegram notifications when a new order is received.
     
     Args:
-        order_data (dict): Contains 'order_id' and 'total_amount' (and optionally 'items' or 'items_json').
+        order_data_or_id (dict | str): Contains 'order_id' and 'total_amount' (and optionally 'items' or 'items_json'), or just the order_id string.
     """
+    if isinstance(order_data_or_id, str):
+        with Session(engine) as session:
+            order = session.exec(select(Order).where(Order.order_id == order_data_or_id)).first()
+            if not order:
+                logger.error(f"❌ Could not find order {order_data_or_id} in database for notifications.")
+                return
+            order_data = order.model_dump()
+    else:
+        order_data = order_data_or_id or {}
+
     logger.info(f"🔔 BACKGROUND TASK TRIGGERED for Order: {order_data.get('order_id')}")
     
     # ── AUTO-PARSE items from items_json if items list is missing ──

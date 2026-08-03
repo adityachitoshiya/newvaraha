@@ -17,12 +17,12 @@ def products_gallery(request: Request, session: Session = Depends(get_session)):
     
     product_cards = ""
     for p in products:
-        image_url = p.image if p.image else "https://newvaraha-nwbd.vercel.app/varaha-assets/logo.png"
+        image_url = p.image if p.image else "https://res.cloudinary.com/dd5zrsmok/image/upload/v1766342264/logo_hvef6t.png"
         price = f"₹{p.price:,.2f}" if p.price else "Price on Request"
         product_cards += f"""
             <div class="card">
                 <div class="card-image">
-                    <img src="{image_url}" alt="{p.name}" onerror="this.src='https://newvaraha-nwbd.vercel.app/varaha-assets/logo.png'">
+                    <img src="{image_url}" alt="{p.name}" onerror="this.src='https://res.cloudinary.com/dd5zrsmok/image/upload/v1766342264/logo_hvef6t.png'">
                     {f'<span class="tag">{p.tag}</span>' if p.tag else ''}
                 </div>
                 <div class="card-content">
@@ -195,7 +195,7 @@ def products_gallery(request: Request, session: Session = Depends(get_session)):
     <body>
         <header>
             <a href="/" class="logo-text">
-                <img src="https://newvaraha-nwbd.vercel.app/varaha-assets/logo.png" alt="Logo">
+                <img src="https://res.cloudinary.com/dd5zrsmok/image/upload/v1766342264/logo_hvef6t.png" alt="Logo">
                 Varaha Jewels
             </a>
             <a href="/login" style="color: var(--warm-sand); text-decoration: none;">Admin Login</a>
@@ -322,7 +322,7 @@ def read_root():
     </head>
     <body>
         <div class="container">
-            <img src="https://newvaraha-nwbd.vercel.app/varaha-assets/logo.png" alt="Varaha Jewels Logo" class="logo">
+            <img src="https://res.cloudinary.com/dd5zrsmok/image/upload/v1766342264/logo_hvef6t.png" alt="Varaha Jewels Logo" class="logo">
             <h1>Varaha Jewels</h1>
             <p>Secure Backend Service<br>Powering Timeless Elegance</p>
             <a href="/docs" class="btn">Explore API Access</a>
@@ -432,7 +432,7 @@ def login_page(request: Request):
     </head>
     <body>
         <div class="login-container">
-            <img src="https://newvaraha-nwbd.vercel.app/varaha-assets/logo.png" alt="Logo" class="logo">
+            <img src="https://res.cloudinary.com/dd5zrsmok/image/upload/v1766342264/logo_hvef6t.png" alt="Logo" class="logo">
             <h2>Admin Access</h2>
             <script>
                 // Pass URL parameters to form action
@@ -506,7 +506,7 @@ async def get_documentation(request: Request):
         /* Add Custom Logo via Pseudo-element */
         .swagger-ui .topbar .link::before {
             content: "";
-            background-image: url('https://newvaraha-nwbd.vercel.app/varaha-assets/logo.png');
+            background-image: url('https://res.cloudinary.com/dd5zrsmok/image/upload/v1766342264/logo_hvef6t.png');
             background-size: contain;
             background-repeat: no-repeat;
             background-position: center;
