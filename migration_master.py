@@ -241,7 +241,7 @@ TABLE_COLUMNS = {
         ("category_restriction", "VARCHAR", ""),
         ("is_active", "BOOLEAN", "DEFAULT TRUE"),
         ("sort_order", "INTEGER", "DEFAULT 0"),
-        ("crea ted_at", "TIMESTAMP", "DEFAULT NOW()"),
+        ("created_at", "TIMESTAMP", "DEFAULT NOW()"),
     ],
     "cart": [
         ("customer_id", "INTEGER", "NOT NULL"),
@@ -426,7 +426,8 @@ def migrate():
                 sql = f'ALTER TABLE "{table_name}" ADD COLUMN {col_name} {col_type} {alter_default}'.strip()
                 
                 try:
-                    conn.execute(text(sql))
+                    with conn.begin_nested():
+                        conn.execute(text(sql))
                     print(f"   ✅ {table_name}.{clean_col_name} ({col_type})")
                     added_count += 1
                 except Exception as e:

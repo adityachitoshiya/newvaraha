@@ -1,6 +1,7 @@
 import smtplib
 import requests
 import os
+import html
 import resend
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -538,35 +539,51 @@ def send_order_notifications(order_data):
             full_address = ', '.join([p for p in address_parts if p])
 
             message = (
-                f"🛍️ *NEW ORDER RECEIVED!*\n"
+                f"🛍️ <b>NEW ORDER RECEIVED!</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n\n"
-                f"🆔 *Order ID:* `{order_data.get('order_id')}`\n\n"
-                f"👤 *Customer:* {order_data.get('customer_name', 'N/A')}\n"
-                f"📞 *Phone:* {order_data.get('phone', 'N/A')}\n"
-                f"📧 *Email:* {order_data.get('email', 'N/A')}\n\n"
-                f"📦 *Items:*\n{items_text}\n"
-                f"{discount_text}"
-                f"💰 *Total Amount:* ₹{order_data.get('total_amount', 0)}\n"
-                f"{pay_emoji} *Payment:* {pay_label}\n\n"
-                f"📍 *Delivery Address:*\n{full_address}\n\n"
+                f"🆔 <b>Order ID:</b> <code>{order_data.get('order_id')}</code>\n\n"
+                f"👤 <b>Customer:</b> {html.escape(str(order_data.get('customer_name', 'N/A')))}\n"
+                f"📞 <b>Phone:</b> {html.escape(str(order_data.get('phone', 'N/A')))}\n"
+                f"📧 <b>Email:</b> {html.escape(str(order_data.get('email', 'N/A')))}\n\n"
+                f"📦 <b>Items:</b>\n{html.escape(items_text)}\n"
+                f"{html.escape(discount_text)}"
+                f"💰 <b>Total Amount:</b> ₹{order_data.get('total_amount', 0)}\n"
+                f"{pay_emoji} <b>Payment:</b> {pay_label}\n\n"
+                f"📍 <b>Delivery Address:</b>\n{html.escape(full_address)}\n\n"
                 f"━━━━━━━━━━━━━━━━━━"
             )
             
-            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-            payload = {
-                "chat_id": chat_id,
-                "text": message,
-                "parse_mode": "Markdown"
-            }
+            send_telegram_alert(message, parse_mode="HTML")
             
-            response = requests.post(url, json=payload, timeout=10)
-            response.raise_for_status()
-            logger.info("Telegram notification sent successfully")
         else:
             logger.warning("Telegram credentials not set. Skipping Telegram notification.")
             
     except Exception as e:
         logger.error(f"Failed to send Telegram notification: {str(e)}")
+
+def send_telegram_alert(message: str, parse_mode: str = "HTML"):
+    """
+    Sends a general text alert to the configured Telegram chat.
+    Safe against Markdown errors if parse_mode is HTML.
+    """
+    try:
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        if not bot_token or not chat_id:
+            logger.warning("Telegram credentials not configured. Alert skipped.")
+            return
+
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": parse_mode
+        }
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+        logger.info("Telegram alert sent successfully.")
+    except Exception as e:
+        logger.error(f"Failed to send telegram alert: {str(e)}")
 
 
 def send_shipping_notifications(order_data):

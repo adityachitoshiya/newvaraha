@@ -351,6 +351,16 @@ def bulk_upload_reviews(product_id: str, request: BulkReviewUploadRequest, curre
                 rating_str = clean_row.get('rating', '').strip()
                 comment = clean_row.get('comment', '').strip()
                 
+                # Check for custom date
+                date_str = clean_row.get('date', clean_row.get('time', '')).strip()
+                review_date = datetime.utcnow()
+                if date_str:
+                    from dateutil import parser as date_parser
+                    try:
+                        review_date = date_parser.parse(date_str)
+                    except Exception:
+                        pass # fallback to utcnow if invalid
+                
                 if not name or not rating_str or not comment:
                     errors.append(f"Row {idx}: Missing required fields")
                     continue
@@ -370,7 +380,7 @@ def bulk_upload_reviews(product_id: str, request: BulkReviewUploadRequest, curre
                     rating=rating,
                     comment=comment,
                     media_urls="[]",
-                    created_at=datetime.utcnow()
+                    created_at=review_date
                 )
                 session.add(new_review)
                 created_count += 1
