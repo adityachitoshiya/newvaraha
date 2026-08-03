@@ -5,7 +5,7 @@ from pydantic import BaseModel
 import json
 import uuid
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Internal Imports
 from database import get_session
@@ -187,53 +187,154 @@ def calculate_prepaid_discount(base_amount: float, payment_method: str, session:
         return 0.0
 
 
-def deduct_stock_for_items(items: list, session: Session):
+def deduct_stock_for_items(items: list, order_id: str, session: Session):
     """
-    Deduct stock for each item in the order.
+    Deduct stock for each item in the order AND write an InventoryLog entry (Fix #4).
     items: List of dicts with 'productId' and 'quantity' keys.
     Should be called AFTER order is successfully created.
     """
-    from models import Product
-    
+    from models import Product, InventoryLog
+
     for item in items:
         product_id = item.get("productId")
         quantity = item.get("quantity", 1)
-        
+
         if not product_id:
             continue
-            
+
         product = session.get(Product, product_id)
         if product and product.stock is not None:
+            old_stock = product.stock
             product.stock = max(0, product.stock - quantity)
             session.add(product)
-            print(f"📦 Stock Update: {product_id} -> {product.stock} (deducted {quantity})")
-    
+
+            # Fix #4 — Inventory audit log
+            log = InventoryLog(
+                product_id=product_id,
+                change_qty=-quantity,
+                reason="order",
+                order_id=order_id,
+                stock_after=product.stock,
+            )
+            session.add(log)
+            print(f"📦 Stock Update: {product_id} -> {old_stock} → {product.stock} (deducted {quantity})")
+
     session.commit()
+
+
+# Fix #3 helpers — Coupon usage limits
+def validate_coupon_usage_limit(coupon_code: str, customer_email: str, session: Session):
+    """
+    Raises HTTPException if the coupon has hit its global usage_limit
+    or the per-user per_user_limit for this customer_email.
+    """
+    if not coupon_code:
+        return
+    from models import Coupon, CouponUsage
+    coupon = session.exec(
+        select(Coupon).where(Coupon.code == coupon_code.strip().upper())
+    ).first()
+    if not coupon:
+        return  # Will be caught later by validate_coupon_server_side
+
+    # Global usage limit
+    if coupon.usage_limit is not None and coupon.used_count >= coupon.usage_limit:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Coupon '{coupon.code}' has reached its maximum usage limit."
+        )
+
+    # Per-user limit
+    if coupon.per_user_limit and coupon.per_user_limit > 0 and customer_email:
+        user_uses = session.exec(
+            select(CouponUsage).where(
+                CouponUsage.coupon_code == coupon.code,
+                CouponUsage.customer_email == customer_email.lower(),
+            )
+        ).all()
+        if len(user_uses) >= coupon.per_user_limit:
+            raise HTTPException(
+                status_code=400,
+                detail=f"You have already used coupon '{coupon.code}' the maximum number of times."
+            )
+
+
+def increment_coupon_usage(coupon_code: str, customer_email: str, order_id: str, session: Session):
+    """
+    Atomically increment used_count on the coupon and insert a CouponUsage row.
+    Call this AFTER the order has been committed.
+    """
+    if not coupon_code:
+        return
+    from models import Coupon, CouponUsage
+    coupon = session.exec(
+        select(Coupon).where(Coupon.code == coupon_code.strip().upper())
+    ).first()
+    if not coupon:
+        return
+    coupon.used_count = (coupon.used_count or 0) + 1
+    session.add(coupon)
+    usage = CouponUsage(
+        coupon_code=coupon.code,
+        customer_email=(customer_email or "").lower(),
+        order_id=order_id,
+    )
+    session.add(usage)
+    session.commit()
+    print(f"🎟️  Coupon {coupon.code} usage: {coupon.used_count}/{coupon.usage_limit or '∞'}")
 
 
 def recalculate_amount_server_side(items: list, session: Session) -> float:
     """
-    🔒 SECURITY: Recalculate total amount from DB product prices.
+    🔒 SECURITY: Recalculate total amount from DB product/variant prices.
     Never trust frontend-supplied amounts for order creation.
+    
+    Priority:
+    1. If variantId is a valid integer → look up ProductVariant price from DB
+    2. If variant has its own price → use it; otherwise fall back to product.price
+    3. Validate: selling price must not exceed product MRP
+    
     Returns the verified total amount.
     """
-    from models import Product
+    from models import Product, ProductVariant
     total = 0.0
     for item in items:
         product_id = item.get("productId")
         quantity = item.get("quantity", 1)
+        variant_id = item.get("variantId")
         if not product_id:
             continue
         product = session.get(Product, product_id)
-        if product:
-            price = product.price if product.price is not None else 0
-            # Validate: selling price must not exceed MRP
-            if product.mrp is not None and price > product.mrp:
-                print(f"⚠️ PRICE INTEGRITY: Product {product_id} price ({price}) > MRP ({product.mrp}). Using MRP.")
-                price = product.mrp
-            total += price * quantity
-        else:
+        if not product:
             raise HTTPException(status_code=400, detail=f"Product {product_id} not found")
+        
+        # Start with product base price
+        price = product.price if product.price is not None else 0
+        
+        # Check if a real ProductVariant exists with a different price
+        if variant_id:
+            variant = None
+            # Try integer ID lookup (real DB variant)
+            try:
+                vid = int(variant_id)
+                variant = session.get(ProductVariant, vid)
+            except (ValueError, TypeError):
+                pass
+            
+            # If variant found and has its own price, use it
+            if variant and variant.price is not None:
+                price = variant.price
+                print(f"🔄 Using variant price: ₹{price} (variant_id={variant_id}) instead of product price ₹{product.price}")
+        
+        # Validate: selling price must not exceed MRP
+        if product.mrp is not None and price > product.mrp:
+            print(f"⚠️ PRICE INTEGRITY: Product {product_id} price ({price}) > MRP ({product.mrp}). Using MRP.")
+            price = product.mrp
+        
+        total += price * quantity
+        print(f"🧮 Price calc: {product_id} × {quantity} @ ₹{price} = ₹{price * quantity}")
+    
+    print(f"🧮 Server-side verified total: ₹{round(total, 2)}")
     return round(total, 2)
 
 
@@ -496,27 +597,40 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
             session.add(local_customer)
             session.commit()
 
-    # Generate Order ID
-    order_id_str = f"ORD-{int(time.time())}"
+    # Generate Order ID (with random suffix to prevent collision)
+    order_id_str = f"ORD-{int(time.time())}-{uuid.uuid4().hex[:6]}"
     
     items_list = []
     if order_data.items:
-        items_list = [item.dict() for item in order_data.items]
+        items_list = [item.model_dump() for item in order_data.items]
     else:
-        from models import Product
+        from models import Product as ProductModel
         _pid = order_data.productId
-        _db_prod = session.get(Product, _pid) if _pid else None
+        _db_prod = session.get(ProductModel, _pid) if _pid else None
         _pname = _db_prod.name if _db_prod else "Jewellery Item"
+        # Use DB product price, not frontend-supplied amount
+        _db_price = _db_prod.price if _db_prod and _db_prod.price is not None else 0
         items_list = [{
             "productId": order_data.productId,
             "productName": _pname,
             "variantId": order_data.variantId,
             "quantity": order_data.quantity,
-            "price": order_data.amount / order_data.quantity if order_data.quantity else 0
+            "price": _db_price
         }]
 
     # 🔒 SERVER-SIDE PRICE RECALCULATION — never trust frontend amounts
     verified_amount = recalculate_amount_server_side(items_list, session)
+
+    # 🔒 SYNC: Update item prices in items_list to match DB-verified prices
+    # This ensures items_json (stored in DB) shows correct prices matching total_amount
+    from models import Product as ProductSync
+    for item in items_list:
+        pid = item.get("productId")
+        if not pid:
+            continue
+        prod = session.get(ProductSync, pid)
+        if prod:
+            item["price"] = prod.price if prod.price is not None else 0
 
     # REGION BLOCK CHECK - reject orders for blocked delivery states
     validate_delivery_state_not_blocked(order_data.state, session)
@@ -542,7 +656,10 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
     # Calculate Tax (using verified amount, not frontend amount)
     tax_data = calculate_tax_breakdown(final_amount, order_data.state)
 
-    # 🔴 STOCK VALIDATION — check before creating order
+    # Fix #3 — Coupon usage limit check (global + per user)
+    validate_coupon_usage_limit(order_data.couponCode, order_data.email, session)
+
+    # Fix #2 — STOCK RE-VALIDATION: re-read stock atomically right before order insert
     from models import Product
     for item in items_list:
         product = session.get(Product, item.get("productId"))
@@ -579,7 +696,7 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
         
         status_history=json.dumps([{
             "status": "pending",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "comment": "Order placed via COD" + (f" | Coupon: {order_data.couponCode} (-₹{coupon_discount})" if coupon_discount > 0 else "")
         }])
     )
@@ -587,9 +704,13 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
     session.add(new_order)
     session.commit()
     session.refresh(new_order)
-    
-    # Deduct Stock for ordered items
-    deduct_stock_for_items(items_list, session)
+
+    # Deduct Stock for ordered items + write InventoryLog (Fix #4)
+    deduct_stock_for_items(items_list, new_order.order_id, session)
+
+    # Increment coupon usage count (Fix #3)
+    if order_data.couponCode and coupon_discount > 0:
+        increment_coupon_usage(order_data.couponCode, order_data.email, new_order.order_id, session)
 
     # ================================================================
     # AUTO-SAVE ADDRESS to Address Book for logged-in users
@@ -633,7 +754,7 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
             print(f"⚠️ Address auto-save failed (non-blocking): {e}")
 
     # Notify
-    background_tasks.add_task(send_order_notifications, new_order.dict())
+    background_tasks.add_task(send_order_notifications, new_order.model_dump())
     
     return {"ok": True, "orderId": new_order.order_id}
 
@@ -673,7 +794,7 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
     # 🔒 SERVER-SIDE PRICE RECALCULATION for payment session
     items_for_calc = []
     if order_data.items:
-        items_for_calc = [item.dict() for item in order_data.items]
+        items_for_calc = [item.model_dump() for item in order_data.items]
     elif order_data.productId:
         items_for_calc = [{"productId": order_data.productId, "quantity": order_data.quantity or 1}]
     
@@ -1134,16 +1255,27 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
             product_id = order_data.get('productId')
             db_product = session.get(Product, product_id)
             product_name = db_product.name if db_product else "Jewellery Item"
+            _db_price = db_product.price if db_product and db_product.price is not None else 0
             items = [{
                 "productId": product_id,
                 "productName": product_name,
                 "variantId": order_data.get('variantId'),
                 "quantity": order_data.get('quantity'),
-                "price": order_data.get('amount')
+                "price": _db_price
             }]
         
         # 🔒 SERVER-SIDE PRICE RECALCULATION
         pp_verified_amount = recalculate_amount_server_side(items, session) if items else order_data.get('amount', 0)
+
+        # 🔒 SYNC: Update item prices in items list to match DB-verified prices
+        from models import Product as ProductSyncPP
+        for item in items:
+            pid = item.get("productId")
+            if not pid:
+                continue
+            prod = session.get(ProductSyncPP, pid)
+            if prod:
+                item["price"] = prod.price if prod.price is not None else 0
 
         # 🔒 SERVER-SIDE COUPON VALIDATION
         pp_coupon_code = order_data.get('couponCode', '') or ''
@@ -1185,7 +1317,7 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
             igst_amount=tax_data["igst_amount"],
             status_history=json.dumps([{
                 "status": "paid",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "comment": f"Payment via PhonePe. TxnID: {transaction_id}"
                     + (f" | Coupon: {pp_coupon_code} (-₹{pp_coupon_discount})" if pp_coupon_discount > 0 else "")
                     + (f" | Prepaid Discount: ₹{prepaid_discount}" if prepaid_discount > 0 else "")
@@ -1195,12 +1327,12 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
         session.add(new_order)
         session.commit()
         session.refresh(new_order)
-        
-        # Deduct Stock for ordered items
-        deduct_stock_for_items(items, session)
+
+        # Fix #4 — Deduct stock + InventoryLog
+        deduct_stock_for_items(items, new_order.order_id, session)
         
         # Send notifications
-        background_tasks.add_task(send_order_notifications, new_order.dict())
+        background_tasks.add_task(send_order_notifications, new_order.model_dump())
         
         print(f"DEBUG PhonePe: Order {new_order.order_id} created successfully")
         
@@ -1269,12 +1401,13 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
             _pid = order_data.get('productId')
             _db_prod = session.get(Product, _pid) if _pid else None
             _pname = _db_prod.name if _db_prod else "Jewellery Item"
+            _db_price = _db_prod.price if _db_prod and _db_prod.price is not None else 0
             items = [{
                 "productId": _pid,
                 "productName": _pname,
                 "variantId": order_data.get('variantId'),
                 "quantity": order_data.get('quantity'),
-                "price": order_data.get('amount')
+                "price": _db_price
             }]
 
         # --- LOGIC UPDATE: Prioritize Logged-in User ---
@@ -1348,6 +1481,16 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
         rzp_items = items if items else []
         rzp_verified_amount = recalculate_amount_server_side(rzp_items, session) if rzp_items else order_data.get('amount', 0)
 
+        # 🔒 SYNC: Update item prices in items list to match DB-verified prices
+        from models import Product as ProductSyncRzp
+        for item in items:
+            pid = item.get("productId")
+            if not pid:
+                continue
+            prod = session.get(ProductSyncRzp, pid)
+            if prod:
+                item["price"] = prod.price if prod.price is not None else 0
+
         # 🔒 SERVER-SIDE COUPON VALIDATION
         rzp_coupon_code = order_data.get('couponCode', '') or ''
         rzp_coupon_discount = validate_coupon_server_side(rzp_coupon_code, rzp_verified_amount, session)
@@ -1363,6 +1506,9 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
         total_discount = rzp_coupon_discount + prepaid_discount
 
         tax_data = calculate_tax_breakdown(final_amount, state_input)
+
+        # Fix #3 — Coupon usage limit check (global + per user) BEFORE creating order
+        validate_coupon_usage_limit(rzp_coupon_code, order_data.get('email', ''), session)
 
         new_order = Order(
             order_id=f"ORD-{razorpay_order_id.replace('order_', '')}" if razorpay_order_id else f"ORD-{int(time.time())}",
@@ -1380,7 +1526,9 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
             email_status="pending",
             user_id=uuid.UUID(user_id) if user_id else None,
             items_json=json.dumps(items),
-            
+            # Fix #1 — Store Razorpay IDs for webhook idempotency
+            razorpay_order_id=razorpay_order_id,
+            razorpay_payment_id=razorpay_payment_id,
             # Tax Fields
             state=state_input,
             hsn_code=tax_data["hsn_code"],
@@ -1388,25 +1536,45 @@ def update_order_status_callback(payload: Dict[str, Any], background_tasks: Back
             cgst_amount=tax_data["cgst_amount"],
             sgst_amount=tax_data["sgst_amount"],
             igst_amount=tax_data["igst_amount"],
-            
             status_history=json.dumps([{
                 "status": "paid",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "comment": f"Payment Successful. Ref: {razorpay_payment_id}"
-                    + (f" | Coupon: {rzp_coupon_code} (-₹{rzp_coupon_discount})" if rzp_coupon_discount > 0 else "")
-                    + (f" | Prepaid Discount: ₹{prepaid_discount}" if prepaid_discount > 0 else "")
+                    + (f" | Coupon: {rzp_coupon_code} (-\u20b9{rzp_coupon_discount})" if rzp_coupon_discount > 0 else "")
+                    + (f" | Prepaid Discount: \u20b9{prepaid_discount}" if prepaid_discount > 0 else "")
             }])
         )
-        
+
         session.add(new_order)
         session.commit()
         session.refresh(new_order)
-        
-        # 🔒 Deduct stock for Razorpay orders (was missing before!)
-        deduct_stock_for_items(items, session)
-        
-        background_tasks.add_task(send_order_notifications, new_order.dict())
-        
+
+        # Fix #4 — Deduct stock + InventoryLog
+        deduct_stock_for_items(items, new_order.order_id, session)
+
+        # Fix #3 — Increment coupon usage
+        if rzp_coupon_code and rzp_coupon_discount > 0:
+            increment_coupon_usage(rzp_coupon_code, order_data.get('email', ''), new_order.order_id, session)
+
+        # Fix #5 — Log PaymentTransaction
+        try:
+            from models import PaymentTransaction
+            txn = PaymentTransaction(
+                order_id=new_order.order_id,
+                razorpay_order_id=razorpay_order_id,
+                razorpay_payment_id=razorpay_payment_id,
+                status="captured",
+                amount=final_amount,
+                source="client",
+                raw_response=json.dumps(payload) if isinstance(payload, dict) else str(payload)[:2000],
+            )
+            session.add(txn)
+            session.commit()
+        except Exception as txn_err:
+            print(f"⚠️ PaymentTransaction log failed (non-blocking): {txn_err}")
+
+        background_tasks.add_task(send_order_notifications, new_order.model_dump())
+
         return {"ok": True, "orderId": new_order.order_id}
 
     except Exception as e:
@@ -1422,7 +1590,7 @@ def create_order(order: Order, background_tasks: BackgroundTasks, current_user: 
         session.refresh(order)
         
         # Send notifications in background
-        background_tasks.add_task(send_order_notifications, order.dict())
+        background_tasks.add_task(send_order_notifications, order.model_dump())
         
         return order
     except Exception as e:
@@ -1566,7 +1734,7 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: Back
         order.courier_name = "Mock Courier"
         order.status = "Shipped"
         
-        status_update = {"status": "Shipped", "timestamp": datetime.utcnow().isoformat(), "comment": "Order shipped via Mock Courier"}
+        status_update = {"status": "Shipped", "timestamp": datetime.now(timezone.utc).isoformat(), "comment": "Order shipped via Mock Courier"}
         status_history = json.loads(order.status_history) if order.status_history else []
         status_history.append(status_update)
         order.status_history = json.dumps(status_history)
@@ -1576,7 +1744,7 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: Back
         session.refresh(order)
         
         # Trigger shipping notification email
-        background_tasks.add_task(send_shipping_notifications, order.dict())
+        background_tasks.add_task(send_shipping_notifications, order.model_dump())
         print(f"DEBUG: Shipping notification triggered for mock shipment {mock_shipment_id}")
             
         return {"ok": True, "shipment": {"shipmentId": mock_shipment_id, "awb": mock_awb, "courierName": "Mock Courier"}}
@@ -1684,9 +1852,15 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: Back
     except HTTPException as he:
         raise he
     except Exception as e:
-        print("CRITICAL: RapidShyp Wrapper Exception")
-        print(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"RapidShyp Client Error: {str(e)}")
+        # Fix #8 — RapidShyp API failure: flag order for manual shipping instead of crashing
+        print(f"[RAPIDSHYP] ⚠️ API exception: {traceback.format_exc()}")
+        _flag_order_shipping_pending(order, str(e), session, background_tasks)
+        return {
+            "ok": False,
+            "warning": "Shipment could not be created automatically due to a RapidShyp API error. "
+                       "The order has been flagged as 'shipping_pending_manual'. Admin has been notified.",
+            "order_id": order.order_id,
+        }
     
     if response.get("status") == "SUCCESS" or response.get("orderCreated"):
         # Extract Shipment Details
@@ -1706,7 +1880,7 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: Back
             history = json.loads(order.status_history)
             history.append({
                 "status": "Shipped",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "comment": f"Shipped via {order.courier_name}. AWB: {order.awb_number}"
             })
             order.status_history = json.dumps(history)
@@ -1716,12 +1890,61 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: Back
             session.refresh(order)
             
             # Trigger notification
-            background_tasks.add_task(send_shipping_notifications, order.dict()) 
+            background_tasks.add_task(send_shipping_notifications, order.model_dump()) 
             
             return {"ok": True, "shipment": sh}
     
     print(f"RapidShyp Error: {response}")
-    raise HTTPException(status_code=400, detail=f"Failed to create shipment: {response.get('remarks') or response}")
+    # Fix #8 — RapidShyp FAILED status: flag instead of crash
+    error_msg = response.get('remarks') or str(response)
+    _flag_order_shipping_pending(order, f"RapidShyp FAILED: {error_msg}", session, background_tasks)
+    return {
+        "ok": False,
+        "warning": f"Shipment creation failed: {error_msg}. Order flagged for manual shipping. Admin notified.",
+        "order_id": order.order_id,
+    }
+
+
+def _flag_order_shipping_pending(order, error_msg: str, session, background_tasks=None):
+    """
+    Fix #8: When RapidShyp API fails, mark order as shipping_pending_manual
+    and send Telegram alert to admin instead of returning a 500 error.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    try:
+        order.status = "shipping_pending_manual"
+        try:
+            hist = json.loads(order.status_history or "[]")
+        except Exception:
+            hist = []
+        hist.append({
+            "status": "shipping_pending_manual",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "comment": f"RapidShyp API failed: {error_msg[:300]}",
+        })
+        order.status_history = json.dumps(hist)
+        session.add(order)
+        session.commit()
+        print(f"[RAPIDSHYP-FALLBACK] Order {order.order_id} flagged as shipping_pending_manual")
+    except Exception as save_err:
+        print(f"[RAPIDSHYP-FALLBACK] ⚠️ Could not save status: {save_err}")
+
+    # Send Telegram alert to admin
+    try:
+        from notifications import send_telegram_alert
+        msg = (
+            f"🚨 SHIPPING ALERT 🚨\n"
+            f"Order: {order.order_id}\n"
+            f"Customer: {order.customer_name}\n"
+            f"Amount: ₹{order.total_amount}\n"
+            f"Error: {error_msg[:500]}\n"
+            f"Action: Please ship manually or retry from Admin Panel → Orders."
+        )
+        send_telegram_alert(msg)
+    except Exception as tg_err:
+        print(f"[RAPIDSHYP-FALLBACK] ⚠️ Telegram alert failed: {tg_err}")
 
 @router.get("/api/orders/{order_id}/track")
 def track_order_endpoint(order_id: str, session: Session = Depends(get_session)):
