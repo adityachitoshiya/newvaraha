@@ -1,21 +1,27 @@
-fastapi
-uvicorn[standard]
-sqlmodel
-pydantic>=2.0.0
-python-jose[cryptography]
-passlib[argon2]
+# Core versions pinned to the versions in your local .venv (tested).
+# Unpinned sqlmodel/fastapi can silently break the app on the next deploy
+# (e.g. sqlmodel 0.0.48 rejects the naive datetimes used everywhere).
+fastapi==0.136.0
+starlette==1.0.0
+uvicorn[standard]==0.44.0
+sqlmodel==0.0.37
+sqlalchemy==2.0.47
+pydantic==2.12.5
+python-jose[cryptography]==3.5.0
+passlib[argon2]==1.7.4
 argon2-cffi
-razorpay
+razorpay==2.0.1
 requests
+httpx
 cloudinary
 python-multipart
 python-dotenv
 psycopg2-binary
-supabase
+supabase==2.28.3
 Pillow
 gunicorn
 psutil
 moviepy
 boto3
 resend
-firebase-admin
+firebase-admin==7.4.0

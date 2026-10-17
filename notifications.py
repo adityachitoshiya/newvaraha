@@ -2,6 +2,15 @@ import smtplib
 import requests
 import os
 import html
+
+
+def _order_access_key(order_id):
+    """Signed key that lets a guest open their own order page from an email link."""
+    try:
+        from routes.tracking import generate_tracking_token
+        return generate_tracking_token(str(order_id or ""))
+    except Exception:
+        return ""
 import resend
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -277,7 +286,7 @@ def send_order_notifications(order_data_or_id):
                                                     <!-- CTA Button -->
                                                     <div class="btn-container">
                                                         <a href="{tracking_url}" class="btn" style="margin-right: 10px;">Track Order</a>
-                                                        <a href="{os.getenv('FRONTEND_URL', 'https://varahajewels.com')}/orders/{order_data.get('order_id')}" class="btn" style="background-color: transparent; color: #1a1a1a;">View Order Details</a>
+                                                        <a href="{os.getenv('FRONTEND_URL', 'https://varahajewels.in')}/orders/{order_data.get('order_id')}?key={_order_access_key(order_data.get('order_id'))}" class="btn" style="background-color: transparent; color: #1a1a1a;">View Order Details</a>
                                                     </div>
                                                     
                                                     <p style="text-align: center; font-size: 14px; color: #777; margin-top: 30px; font-family: 'Helvetica', sans-serif;">
@@ -614,7 +623,7 @@ def send_shipping_notifications(order_data):
 
         subject = f"Your Order has been Shipped! - {order_data.get('order_id')} | Varaha Jewels"
         
-        tracking_url = f"{os.getenv('FRONTEND_URL', 'https://varahajewels.com')}/orders/{order_data.get('order_id')}"
+        tracking_url = f"{os.getenv('FRONTEND_URL', 'https://varahajewels.in')}/orders/{order_data.get('order_id')}?key={_order_access_key(order_data.get('order_id'))}"
         
         body_html = f"""
         <!DOCTYPE html>
@@ -700,8 +709,8 @@ def send_tracking_notification(order, status: str):
             return
         
         # Generate tracking token
-        tracking_secret = os.getenv("TRACKING_SECRET", "varaha_track_secret_2026")
-        tracking_token = hashlib.sha256(f"{order.order_id}_{tracking_secret}".encode()).hexdigest()[:16]
+        from routes.tracking import generate_tracking_token
+        tracking_token = generate_tracking_token(order.order_id)
         tracking_url = f"{frontend_url}/track/{order.order_id}_{tracking_token}"
         
         subject = None

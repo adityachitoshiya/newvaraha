@@ -213,9 +213,44 @@ def products_gallery(request: Request, session: Session = Depends(get_session)):
 
 # --- Security for Docs (Cookie Based) ---
 
+import os as _os
+import hmac as _hmac
+import hashlib as _hashlib
+import time as _time
+
+_DOCS_SESSION_TTL = 8 * 3600  # 8 hours
+
+
+def _docs_signing_key() -> bytes:
+    from auth_utils import SECRET_KEY
+    return (SECRET_KEY + "|" + _os.getenv("ADMIN_DOCS_PASS", "")).encode()
+
+
+def _make_docs_cookie() -> str:
+    expires = str(int(_time.time()) + _DOCS_SESSION_TTL)
+    sig = _hmac.new(_docs_signing_key(), expires.encode(), _hashlib.sha256).hexdigest()
+    return f"{expires}.{sig}"
+
+
+def _safe_next(next_url: str) -> str:
+    # Only allow local paths (prevents open-redirect / injection)
+    if not next_url or not next_url.startswith("/") or next_url.startswith("//") or "\\" in next_url:
+        return "/docs"
+    return next_url
+
+
 def check_admin_cookie(request: Request):
     token = request.cookies.get("admin_docs_token")
-    if not token or token != "varaha_secure_session_token":
+    if not token or "." not in token:
+        return None
+    expires, sig = token.split(".", 1)
+    expected = _hmac.new(_docs_signing_key(), expires.encode(), _hashlib.sha256).hexdigest()
+    if not _hmac.compare_digest(sig, expected):
+        return None
+    try:
+        if int(expires) < int(_time.time()):
+            return None
+    except ValueError:
         return None
     return token
 
@@ -339,8 +374,11 @@ def read_root():
 # --- Custom Login Page ---
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
+    import html as _html
+    from urllib.parse import quote as _quote
     error = request.query_params.get("error")
-    error_msg = f'<p style="color: #ff6b6b; margin-top: 10px;">{error}</p>' if error else ""
+    error_msg = f'<p style="color: #ff6b6b; margin-top: 10px;">{_html.escape(error)}</p>' if error else ""
+    next_param = _html.escape(_quote(_safe_next(request.query_params.get("next") or "/docs"), safe="/"))
     
     return f"""
     <!DOCTYPE html>
@@ -434,12 +472,7 @@ def login_page(request: Request):
         <div class="login-container">
             <img src="https://res.cloudinary.com/dd5zrsmok/image/upload/v1766342264/logo_hvef6t.png" alt="Logo" class="logo">
             <h2>Admin Access</h2>
-            <script>
-                // Pass URL parameters to form action
-                const urlParams = new URLSearchParams(window.location.search);
-                const next = urlParams.get('next') || '/docs';
-                document.write(`<form action="/login?next=${{next}}" method="post">`);
-            </script>
+            <form action="/login?next={next_param}" method="post">
                 <input type="text" name="username" placeholder="Username" required>
                 <input type="password" name="password" placeholder="Password" required>
                 <button type="submit">Sign In</button>
@@ -453,16 +486,27 @@ def login_page(request: Request):
 @router.post("/login")
 def login(response: Response, username: str = Form(...), password: str = Form(...), next: str = "/docs"):
     import os
-    admin_user = os.getenv("ADMIN_DOCS_USER", "admin")
-    admin_pass = os.getenv("ADMIN_DOCS_PASS", "change_me_immediately")
+    admin_user = os.getenv("ADMIN_DOCS_USER")
+    admin_pass = os.getenv("ADMIN_DOCS_PASS")
+    next = _safe_next(next)
+
+    # Docs login is disabled unless credentials are explicitly configured
+    if not admin_user or not admin_pass:
+        return RedirectResponse(url="/login?error=Docs login disabled", status_code=status.HTTP_303_SEE_OTHER)
 
     if secrets.compare_digest(username, admin_user) and secrets.compare_digest(password, admin_pass):
-        # Set a cookie
         response = RedirectResponse(url=next, status_code=status.HTTP_303_SEE_OTHER)
-        response.set_cookie(key="admin_docs_token", value="varaha_secure_session_token", httponly=True)
+        response.set_cookie(
+            key="admin_docs_token",
+            value=_make_docs_cookie(),
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=_DOCS_SESSION_TTL,
+        )
         return response
     else:
-        return RedirectResponse(url=f"/login?error=Invalid Credentials&next={next}", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url="/login?error=Invalid Credentials", status_code=status.HTTP_303_SEE_OTHER)
 
 @router.get("/logout")
 def logout():

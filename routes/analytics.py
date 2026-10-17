@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 
 # Internal Imports
 from database import get_session
-from models import VisitorLog
+from models import VisitorLog, AdminUser
+from dependencies import get_current_admin
 from pydantic import BaseModel
 from sqlalchemy import func, text
 
@@ -100,7 +101,7 @@ async def track_visit(
 
 
 @router.get("/api/analytics")
-def get_analytics(session: Session = Depends(get_session)):
+def get_analytics(session: Session = Depends(get_session), current_user: AdminUser = Depends(get_current_admin)):
     # 1. Total Visits (All Time)
     total_visits = session.exec(select(func.count(VisitorLog.id))).one()
     
@@ -132,7 +133,7 @@ def get_analytics(session: Session = Depends(get_session)):
 
 
 @router.get("/api/analytics/geo")
-def get_geo_analytics(session: Session = Depends(get_session)):
+def get_geo_analytics(session: Session = Depends(get_session), current_user: AdminUser = Depends(get_current_admin)):
     """Get visitor location analytics - top states and countries"""
     
     # Top States (India)
@@ -188,7 +189,7 @@ def get_geo_analytics(session: Session = Depends(get_session)):
 
 
 @router.delete("/api/analytics/clean-template-paths")
-def clean_template_paths(session: Session = Depends(get_session)):
+def clean_template_paths(session: Session = Depends(get_session), current_user: AdminUser = Depends(get_current_admin)):
     """Remove all visitor logs with Next.js template paths like /product/[slug]"""
     result = session.exec(text("DELETE FROM visitorlog WHERE path LIKE '%[%' OR path LIKE '%]%'"))
     session.commit()
@@ -196,7 +197,8 @@ def clean_template_paths(session: Session = Depends(get_session)):
 
 
 @router.get("/api/analytics/logs")
-def get_logs(limit: int = 50, session: Session = Depends(get_session)):
+def get_logs(limit: int = 50, session: Session = Depends(get_session), current_user: AdminUser = Depends(get_current_admin)):
+    limit = max(1, min(limit, 500))
     query = select(VisitorLog).order_by(VisitorLog.timestamp.desc()).limit(limit)
     logs = session.exec(query).all()
     return logs

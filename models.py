@@ -397,3 +397,48 @@ class BlogPost(SQLModel, table=True):
     is_published: bool = False  # Draft vs Published
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class PendingCheckout(SQLModel, table=True):
+    """
+    Server-side snapshot of an online-payment checkout.
+    Created when the Razorpay/PhonePe payment is started; the paid order is
+    built ONLY from this record (never from data the browser sends later),
+    after the gateway confirms the exact amount was paid.
+    """
+    gateway_order_id: str = Field(primary_key=True)  # Razorpay order id / PhonePe merchantOrderId
+    provider: str
+    order_data_json: str = "{}"   # customer + address details
+    items_json: str = "[]"        # server-priced items
+    subtotal: float = 0.0
+    coupon_code: Optional[str] = None
+    coupon_discount: float = 0.0
+    prepaid_discount: float = 0.0
+    amount: float = 0.0           # final amount charged (INR)
+    amount_paise: int = 0
+    user_id: Optional[str] = None # Supabase UUID (if any)
+    order_id: Optional[str] = Field(default=None, index=True)  # set once the order is created
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CouponRule(SQLModel, table=True):
+    """
+    Extra rules for a coupon (kept in a separate table so the existing
+    `coupon` table does not need a migration).
+    """
+    code: str = Field(primary_key=True)          # same as Coupon.code (UPPERCASE)
+    starts_at: Optional[datetime] = None          # UTC, None = active immediately
+    expires_at: Optional[datetime] = None         # UTC, None = never expires
+    usage_limit: Optional[int] = None             # total uses allowed, None = unlimited
+    per_customer_limit: Optional[int] = None      # uses per customer (email/phone), None = unlimited
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CouponUsage(SQLModel, table=True):
+    """One row per order that used a coupon (for usage limits)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    code: str = Field(index=True)
+    order_id: str = Field(index=True)
+    email: Optional[str] = Field(default=None, index=True)
+    phone: Optional[str] = Field(default=None, index=True)   # last 10 digits
+    created_at: datetime = Field(default_factory=datetime.utcnow)

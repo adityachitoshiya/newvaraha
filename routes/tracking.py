@@ -18,7 +18,14 @@ from rapidshyp_utils import rapidshyp_client
 router = APIRouter()
 
 # Secret for generating tracking tokens
-TRACKING_SECRET = os.getenv("TRACKING_SECRET", "varaha_track_secret_2026")
+def _get_tracking_secret() -> str:
+    # Falls back to the JWT secret so no hard-coded secret lives in the code.
+    # NOTE: if you already sent tracking links using the old default, set
+    # TRACKING_SECRET=varaha_track_secret_2026 in .env to keep them working.
+    from auth_utils import SECRET_KEY
+    return os.getenv("TRACKING_SECRET") or SECRET_KEY
+
+TRACKING_SECRET = None  # resolved lazily via _get_tracking_secret()
 
 # --- Schema for Track Lookup ---
 class TrackLookupRequest(BaseModel):
@@ -27,13 +34,14 @@ class TrackLookupRequest(BaseModel):
 
 def generate_tracking_token(order_id: str) -> str:
     """Generate a secure token for public tracking URL."""
-    data = f"{order_id}_{TRACKING_SECRET}"
+    data = f"{order_id}_{_get_tracking_secret()}"
     return hashlib.sha256(data.encode()).hexdigest()[:16]
 
 def verify_tracking_token(order_id: str, token: str) -> bool:
     """Verify the tracking token."""
+    import hmac as _hmac
     expected = generate_tracking_token(order_id)
-    return token == expected
+    return _hmac.compare_digest(str(token), expected)
 
 # Status mapping: RapidShyp status -> Varaha step
 RAPIDSHYP_STATUS_MAP = {
@@ -58,6 +66,18 @@ async def rapidshyp_webhook(request: Request, session: Session = Depends(get_ses
     Webhook endpoint for RapidShyp status updates.
     RapidShyp sends nested payload with records[].shipment_details[].track_scans[]
     """
+    # 🔒 Webhook authentication: set RAPIDSHYP_WEBHOOK_SECRET in .env and add it to
+    # the webhook URL in RapidShyp (…/api/webhook/rapidshyp?secret=XXXX)
+    # or send it in the "x-webhook-secret" header.
+    import hmac as _hmac
+    expected_secret = os.getenv("RAPIDSHYP_WEBHOOK_SECRET")
+    if expected_secret:
+        provided = request.query_params.get("secret") or request.headers.get("x-webhook-secret") or ""
+        if not _hmac.compare_digest(provided, expected_secret):
+            raise HTTPException(status_code=401, detail="Invalid webhook secret")
+    else:
+        print("[WEBHOOK] ⚠️ RAPIDSHYP_WEBHOOK_SECRET not set - webhook is NOT authenticated!")
+
     try:
         payload = await request.json()
         print(f"[WEBHOOK] Received RapidShyp update")
@@ -140,6 +160,7 @@ async def rapidshyp_webhook(request: Request, session: Session = Depends(get_ses
                     })
                 
                 # Update order
+                status_changed = (order.status or "").lower() != (varaha_status or "").lower()
                 order.status = varaha_status
                 order.tracking_data = json.dumps(tracking_history)
                 if courier_name:
@@ -166,7 +187,7 @@ async def rapidshyp_webhook(request: Request, session: Session = Depends(get_ses
                 # Trigger notifications for key statuses
                 try:
                     from notifications import send_tracking_notification
-                    if varaha_status in ["shipped", "out_for_delivery", "delivered"]:
+                    if status_changed and varaha_status in ["shipped", "out_for_delivery", "delivered"]:
                         send_tracking_notification(order, varaha_status)
                 except Exception as e:
                     print(f"[WEBHOOK] Notification error: {e}")

@@ -7,7 +7,8 @@ from pydantic import BaseModel
 # Internal Imports
 from database import get_session
 from models import PaymentGateway
-from dependencies import oauth2_scheme
+from dependencies import get_current_admin
+from models import AdminUser
 
 router = APIRouter()
 
@@ -23,7 +24,7 @@ class GatewayUpdate(BaseModel):
     credentials: Dict[str, Any]
 
 @router.post("/api/gateways", response_model=PaymentGateway)
-def create_gateway(gateway_in: GatewayCreate, token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+def create_gateway(gateway_in: GatewayCreate, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
     # Deactivate others if this one is active
     if gateway_in.is_active:
         statement = select(PaymentGateway).where(PaymentGateway.is_active == True)
@@ -46,16 +47,19 @@ def create_gateway(gateway_in: GatewayCreate, token: str = Depends(oauth2_scheme
     return gateway
 
 @router.get("/api/gateways")
-def read_gateways(token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+def read_gateways(current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
     gateways = session.exec(select(PaymentGateway)).all()
     results = []
     for g in gateways:
         g_dict = g.model_dump()
         try:
             creds = json.loads(g.credentials_json)
-            # Mask sensitive fields
-            if 'key_secret' in creds:
-                creds['key_secret'] = '********'
+            # Mask ALL sensitive fields (secrets, salts, passwords, tokens)
+            for k in list(creds.keys()):
+                kl = k.lower()
+                if any(w in kl for w in ("secret", "salt", "password", "token", "webhook")):
+                    if creds[k]:
+                        creds[k] = '********'
             g_dict['credentials_json'] = json.dumps(creds)
         except:
             pass
@@ -63,7 +67,7 @@ def read_gateways(token: str = Depends(oauth2_scheme), session: Session = Depend
     return results
 
 @router.put("/api/gateways/{gateway_id}", response_model=PaymentGateway)
-def update_gateway(gateway_id: int, gateway_in: GatewayUpdate, token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+def update_gateway(gateway_id: int, gateway_in: GatewayUpdate, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
     gateway = session.get(PaymentGateway, gateway_id)
     if not gateway:
         raise HTTPException(status_code=404, detail="Gateway not found")
@@ -108,7 +112,7 @@ def update_gateway(gateway_id: int, gateway_in: GatewayUpdate, token: str = Depe
     return gateway
 
 @router.delete("/api/gateways/{gateway_id}")
-def delete_gateway(gateway_id: int, token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+def delete_gateway(gateway_id: int, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
     gateway = session.get(PaymentGateway, gateway_id)
     if not gateway:
         raise HTTPException(status_code=404, detail="Gateway not found")

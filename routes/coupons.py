@@ -7,7 +7,7 @@ from pydantic import BaseModel
 # Internal Imports
 from database import get_session
 from models import Coupon, Promotion, AdminUser
-from dependencies import oauth2_scheme, get_current_user
+from dependencies import get_current_admin
 
 router = APIRouter()
 
@@ -21,30 +21,70 @@ class CouponUpdateRequest(BaseModel):
     min_order_amount: Optional[float] = None
     max_discount: Optional[float] = None
     payment_method_restriction: Optional[str] = None
+    # Expiry / usage limits (stored in CouponRule)
+    starts_at: Optional[str] = None
+    expires_at: Optional[str] = None
+    usage_limit: Optional[int] = None
+    per_customer_limit: Optional[int] = None
 
-@router.post("/api/coupons", response_model=Coupon)
+
+VALID_DISCOUNT_TYPES = ("percentage", "fixed", "flat_price", "bogo")
+
+
+class CouponCreateRequest(BaseModel):
+    code: str
+    discount_type: str = "percentage"
+    discount_value: float = 0
+    min_order_amount: Optional[float] = None
+    max_discount: Optional[float] = None
+    payment_method_restriction: Optional[str] = "none"
+    is_active: bool = True
+    starts_at: Optional[str] = None
+    expires_at: Optional[str] = None
+    usage_limit: Optional[int] = None
+    per_customer_limit: Optional[int] = None
+
+@router.post("/api/coupons")
 def create_coupon(
-    coupon: Coupon, 
-    token: str = Depends(oauth2_scheme), 
+    data: CouponCreateRequest, 
+    current_user: AdminUser = Depends(get_current_admin), 
     session: Session = Depends(get_session)
 ):
     """Create a new coupon (Admin only)"""
-    # Check if code already exists
-    existing = session.exec(select(Coupon).where(Coupon.code == coupon.code)).first()
+    from coupon_rules import upsert_rule, rule_to_dict
+    code = (data.code or "").strip().upper()
+    if not code:
+        raise HTTPException(status_code=400, detail="Coupon code is required")
+    if data.discount_type not in VALID_DISCOUNT_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid discount type")
+    if data.discount_value < 0 or (data.discount_type == "percentage" and data.discount_value > 100):
+        raise HTTPException(status_code=400, detail="Invalid discount value")
+    existing = session.exec(select(Coupon).where(Coupon.code == code)).first()
     if existing:
         raise HTTPException(status_code=400, detail="Coupon code already exists")
-    
+
+    coupon = Coupon(
+        code=code,
+        discount_type=data.discount_type,
+        discount_value=data.discount_value,
+        min_order_amount=data.min_order_amount,
+        max_discount=data.max_discount,
+        payment_method_restriction=data.payment_method_restriction or "none",
+        is_active=data.is_active,
+    )
     session.add(coupon)
+    upsert_rule(session, code, data.starts_at, data.expires_at, data.usage_limit, data.per_customer_limit)
     session.commit()
     session.refresh(coupon)
-    return coupon
+    return {**coupon.model_dump(mode="json"), **rule_to_dict(session, code)}
 
 @router.get("/api/coupons")
 def list_coupons(
-    token: str = Depends(oauth2_scheme), 
+    current_user: AdminUser = Depends(get_current_admin), 
     session: Session = Depends(get_session)
 ):
     """List all coupons with linked offer info (Admin only)"""
+    from coupon_rules import rule_to_dict
     coupons = session.exec(select(Coupon)).all()
     result = []
     for c in coupons:
@@ -54,7 +94,8 @@ def list_coupons(
             "min_order_amount": c.min_order_amount, "max_discount": c.max_discount,
             "created_at": c.created_at.isoformat() if c.created_at else None,
             "linked_offer": None,
-            "payment_method_restriction": c.payment_method_restriction or "none"
+            "payment_method_restriction": c.payment_method_restriction or "none",
+            **rule_to_dict(session, c.code),
         }
         promo = session.exec(
             select(Promotion).where(Promotion.coupon_code == c.code)
@@ -70,7 +111,7 @@ def list_coupons(
 @router.delete("/api/coupons/{coupon_id}")
 def delete_coupon(
     coupon_id: int, 
-    token: str = Depends(oauth2_scheme), 
+    current_user: AdminUser = Depends(get_current_admin), 
     session: Session = Depends(get_session)
 ):
     """Delete a coupon (Admin only). Blocks deletion of offer-linked coupons."""
@@ -88,6 +129,10 @@ def delete_coupon(
             detail=f"This coupon is linked to offer '{promo.title}'. Delete or edit the offer instead."
         )
     
+    from models import CouponRule
+    rule = session.get(CouponRule, coupon.code)
+    if rule:
+        session.delete(rule)
     session.delete(coupon)
     session.commit()
     return {"message": "Coupon deleted successfully"}
@@ -97,7 +142,7 @@ def delete_coupon(
 def update_coupon(
     coupon_id: int,
     data: CouponUpdateRequest,
-    token: str = Depends(oauth2_scheme),
+    current_user: AdminUser = Depends(get_current_admin),
     session: Session = Depends(get_session),
 ):
     """Update a coupon (Admin only)"""
@@ -105,9 +150,18 @@ def update_coupon(
     if not coupon:
         raise HTTPException(status_code=404, detail="Coupon not found")
 
+    from coupon_rules import upsert_rule, rule_to_dict
+    from models import CouponRule
+    old_code = coupon.code
+    if data.discount_type is not None and data.discount_type not in VALID_DISCOUNT_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid discount type")
+
     # Safe updating using Pydantic model (avoids float() crash)
     if data.code is not None:
-        coupon.code = data.code.strip().upper()
+        new_code = data.code.strip().upper()
+        if new_code != old_code and session.exec(select(Coupon).where(Coupon.code == new_code)).first():
+            raise HTTPException(status_code=400, detail="Coupon code already exists")
+        coupon.code = new_code
     if data.discount_type is not None:
         coupon.discount_type = data.discount_type
     if data.discount_value is not None:
@@ -121,18 +175,27 @@ def update_coupon(
     if data.payment_method_restriction is not None:
         coupon.payment_method_restriction = data.payment_method_restriction or "none"
 
+    # Rules: the admin form always sends all four fields (empty = no limit)
+    if old_code != coupon.code:
+        old_rule = session.get(CouponRule, old_code)
+        if old_rule:
+            session.delete(old_rule)
+    upsert_rule(session, coupon.code, data.starts_at, data.expires_at, data.usage_limit, data.per_customer_limit)
+
     session.add(coupon)
     session.commit()
     session.refresh(coupon)
-    return coupon
+    return {**coupon.model_dump(mode="json"), **rule_to_dict(session, coupon.code)}
 
 
 @router.get("/api/coupons/param/{code}")
 def validate_coupon(
     code: str, 
+    email: Optional[str] = None,
+    phone: Optional[str] = None,
     session: Session = Depends(get_session)
 ):
-    """Validate a coupon code (Public)"""
+    """Validate a coupon code (Public). email/phone (optional) enable the per-customer limit check."""
     # Try exact match first
     coupon = session.exec(select(Coupon).where(Coupon.code == code)).first()
     
@@ -171,6 +234,11 @@ def validate_coupon(
     elif not coupon.is_active:
         raise HTTPException(status_code=400, detail="Coupon is inactive")
 
+    # Expiry / usage limits
+    from coupon_rules import check_coupon_rules, get_rule
+    check_coupon_rules(session, coupon.code, email, phone)
+    _rule = get_rule(session, coupon.code)
+
     payment_restriction = "none"
     if promo:
         payment_restriction = promo.payment_method_restriction or "none"
@@ -189,5 +257,6 @@ def validate_coupon(
         "min_order_amount": min_order,
         "max_discount": coupon.max_discount,
         "payment_method_restriction": payment_restriction,
+        "expires_at": (_rule.expires_at.isoformat() + "Z") if _rule and _rule.expires_at else None,
         "valid": True
     }
