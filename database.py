@@ -17,6 +17,12 @@ if not database_url:
 if database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
 
+# Name the driver explicitly. Without it SQLAlchemy 2.1+ defaults to "psycopg"
+# (v3), which is not installed (we install psycopg2-binary), and the app fails
+# to start on a fresh deploy.
+if database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
 connect_args = {}
 
 # Only use check_same_thread for SQLite

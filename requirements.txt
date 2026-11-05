@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
-sqlmodel
+sqlmodel==0.0.37
+sqlalchemy==2.0.47
 pydantic>=2.0.0
 python-jose[cryptography]
 passlib[argon2]
