@@ -49,6 +49,7 @@ class OrderCreate(BaseModel):
     paymentMethod: str # 'cod' or 'online'
     codCharges: Optional[float] = 0.0  # ignored - server uses COD_CHARGE
     isCartCheckout: Optional[bool] = False
+    phoneProof: Optional[str] = None   # from /api/otp/verify (needed for COD when OTP is switched on)
 
 import os
 
@@ -648,6 +649,10 @@ def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks,
     cust = _customer_fields(order_data)
     if not cust["email"] or not cust["contact"] or not cust["address"] or not cust["pincode"]:
         raise HTTPException(status_code=400, detail="Please fill all required fields")
+
+    # COD needs a verified mobile number (switched on by TWOFACTOR_API_KEY)
+    from routes.phone_otp import require_phone_proof
+    require_phone_proof(order_data.phoneProof, cust["contact"], session)
 
     # 🔒 Everything below is calculated on the server
     items = build_server_items(order_data, session)
