@@ -10,7 +10,7 @@ from database import create_db_and_tables
 
 from middleware import MonitoringMiddleware
 # Import Routers
-from routes import auth, customer, products, cart, orders, gateways, admin, settings, coupons, analytics, health, dashboard, notifications, reports, tracking, otp, web, categories, wishlist, promotions, blogs
+from routes import auth, customer, products, cart, orders, gateways, admin, settings, coupons, analytics, health, dashboard, notifications, reports, tracking, otp, web, categories, wishlist, promotions, stock_sync, blogs
 
 # Blogs router is optional - routes/blogs.py is not present in this folder.
 try:
@@ -119,5 +119,6 @@ app.include_router(tracking.router, tags=["Tracking"])
 app.include_router(otp.router, tags=["OTP"])
 app.include_router(categories.router, tags=["Categories"])
 app.include_router(promotions.router, tags=["Promotions"])
+app.include_router(stock_sync.router, tags=["Stock sync"])
 if blogs is not None:
     app.include_router(blogs.router, tags=["Blogs"])

@@ -433,3 +433,13 @@ class CouponUsage(SQLModel, table=True):
     email: Optional[str] = Field(default=None, index=True)
     phone: Optional[str] = Field(default=None, index=True)   # last 10 digits
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class SupplierSku(SQLModel, table=True):
+    """Links a supplier's product code (SKU) to one of our products, so the
+    supplier's daily stock sheet can update our stock (routes/stock_sync.py)."""
+    sku: str = Field(primary_key=True)                      # supplier code, UPPERCASE, e.g. CZN198BRN
+    product_id: str = Field(index=True)                     # Product.id
+    supplier_price: Optional[float] = None                  # supplier price at last sync / import
+    last_qty: Optional[int] = None                          # quantity in the last sheet
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
