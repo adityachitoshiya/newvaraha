@@ -243,29 +243,37 @@ def validate_coupon_usage_limit(coupon_code: str, customer_email: str, session: 
     """
     if not coupon_code:
         return
-    from models import Coupon, CouponUsage
+    from models import Coupon
+    try:
+        from models import CouponUsage
+    except ImportError:  # usage tracking not set up in this database yet
+        CouponUsage = None
     coupon = session.exec(
         select(Coupon).where(Coupon.code == coupon_code.strip().upper())
     ).first()
     if not coupon:
         return  # Will be caught later by validate_coupon_server_side
 
+    usage_limit = getattr(coupon, "usage_limit", None)
+    used_count = getattr(coupon, "used_count", 0) or 0
+    per_user_limit = getattr(coupon, "per_user_limit", None)
+
     # Global usage limit
-    if coupon.usage_limit is not None and coupon.used_count >= coupon.usage_limit:
+    if usage_limit is not None and used_count >= usage_limit:
         raise HTTPException(
             status_code=400,
             detail=f"Coupon '{coupon.code}' has reached its maximum usage limit."
         )
 
     # Per-user limit
-    if coupon.per_user_limit and coupon.per_user_limit > 0 and customer_email:
+    if CouponUsage is not None and per_user_limit and per_user_limit > 0 and customer_email:
         user_uses = session.exec(
             select(CouponUsage).where(
                 CouponUsage.coupon_code == coupon.code,
                 CouponUsage.customer_email == customer_email.lower(),
             )
         ).all()
-        if len(user_uses) >= coupon.per_user_limit:
+        if len(user_uses) >= per_user_limit:
             raise HTTPException(
                 status_code=400,
                 detail=f"You have already used coupon '{coupon.code}' the maximum number of times."
@@ -279,7 +287,11 @@ def increment_coupon_usage(coupon_code: str, customer_email: str, order_id: str,
     """
     if not coupon_code:
         return
-    from models import Coupon, CouponUsage
+    from models import Coupon
+    try:
+        from models import CouponUsage
+    except ImportError:  # usage tracking not set up in this database yet
+        return
     coupon = session.exec(
         select(Coupon).where(Coupon.code == coupon_code.strip().upper())
     ).first()
