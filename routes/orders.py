@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from sqlmodel import Session, select
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import json
 import uuid
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 # Internal Imports
 from database import get_session
@@ -19,22 +19,24 @@ import traceback
 router = APIRouter()
 
 # --- Schemas ---
+MAX_QTY_PER_ITEM = 50
+
 class OrderItem(BaseModel):
     productId: str
-    productName: str
+    productName: Optional[str] = None
     variantId: Optional[str] = None
     variantName: Optional[str] = None
-    quantity: int
-    price: float
+    quantity: int = Field(ge=1, le=MAX_QTY_PER_ITEM)   # 🔒 no zero/negative quantities
+    price: Optional[float] = None  # ignored - server uses DB price
 
 class OrderCreate(BaseModel):
     items: Optional[List[OrderItem]] = None
     # For single product checkout
     productId: Optional[str] = None
     variantId: Optional[str] = None
-    quantity: Optional[int] = None
+    quantity: Optional[int] = Field(default=None, ge=1, le=MAX_QTY_PER_ITEM)
     
-    amount: float
+    amount: Optional[float] = 0.0  # ignored - server calculates the amount
     name: str
     email: str
     contact: str
@@ -45,7 +47,7 @@ class OrderCreate(BaseModel):
     couponCode: Optional[str] = None
     discount: Optional[float] = 0.0
     paymentMethod: str # 'cod' or 'online'
-    codCharges: Optional[float] = 0.0
+    codCharges: Optional[float] = 0.0  # ignored - server uses COD_CHARGE
     isCartCheckout: Optional[bool] = False
 
 import os
@@ -103,22 +105,6 @@ def get_order_by_id_flexible(session: Session, order_id_input: str) -> Optional[
             pass
             
     return None
-
-def validate_delivery_state_not_blocked(state: Optional[str], session: Session):
-    """Raise 403 if the delivery state is in the blocked regions list."""
-    if not state:
-        return
-    from models import BlockedRegion
-    blocked = session.exec(
-        select(BlockedRegion).where(BlockedRegion.is_blocked == True)
-    ).all()
-    blocked_names = {r.region_name.strip().lower() for r in blocked}
-    if state.strip().lower() in blocked_names:
-        raise HTTPException(
-            status_code=403,
-            detail=f"We currently do not deliver to {state.strip().title()}. We apologize for the inconvenience."
-        )
-
 
 def calculate_tax_breakdown(total_amount: float, state: str):
     """
@@ -187,13 +173,16 @@ def calculate_prepaid_discount(base_amount: float, payment_method: str, session:
         return 0.0
 
 
-def deduct_stock_for_items(items: list, order_id: str, session: Session):
+def deduct_stock_for_items(items: list, session: Session, order_id: str = ""):
     """
-    Deduct stock for each item in the order AND write an Inventory entry (Fix #4).
+    Deduct stock for each item in the order. Each deduction is one atomic
+    UPDATE ... WHERE stock >= quantity, so two shoppers buying the last piece
+    at the same moment can never push stock below zero (the loser is skipped
+    and the admin gets a Telegram alert). Products with stock = NULL are unlimited.
     items: List of dicts with 'productId' and 'quantity' keys.
     Should be called AFTER order is successfully created.
     """
-    from models import Product, Inventory
+    from models import Product
     from sqlmodel import update
 
     for item in items:
@@ -202,6 +191,10 @@ def deduct_stock_for_items(items: list, order_id: str, session: Session):
 
         if not product_id:
             continue
+
+        product = session.get(Product, product_id)
+        if not product or product.stock is None:
+            continue  # unknown product or unlimited stock
 
         result = session.exec(
             update(Product)
@@ -212,162 +205,43 @@ def deduct_stock_for_items(items: list, order_id: str, session: Session):
             print(f"🚨 OVERSELL BLOCKED: {product_id} insufficient stock for order {order_id}")
             try:
                 from notifications import send_telegram_alert
-                send_telegram_alert(f"Oversell attempt: {product_id} on order {order_id} — manual review needed")
+                send_telegram_alert(f"Oversell attempt: {product_id} on order {order_id} - manual review needed")
             except Exception as e:
                 print(f"Failed to send telegram alert for oversell: {e}")
             continue
-
-        product = session.get(Product, product_id)
-        if product:
-            session.refresh(product)  # guarantee latest stock from DB
-        if product and product.stock is not None:
-            # Fix #4 — Inventory audit log
-            log = Inventory(
-                product_id=product_id,
-                change_qty=-quantity,
-                reason="order",
-                order_id=order_id,
-                stock_after=product.stock,
-            )
-            session.add(log)
-            print(f"📦 Stock Update: {product_id} → {product.stock} (deducted {quantity})")
+        session.refresh(product)
+        print(f"📦 Stock Update: {product_id} -> {product.stock} (deducted {quantity})")
 
     session.commit()
-
-
-# Fix #3 helpers — Coupon usage limits
-def validate_coupon_usage_limit(coupon_code: str, customer_email: str, session: Session):
-    """
-    Raises HTTPException if the coupon has hit its global usage_limit
-    or the per-user per_user_limit for this customer_email.
-    """
-    if not coupon_code:
-        return
-    from models import Coupon
-    try:
-        from models import CouponUsage
-    except ImportError:  # usage tracking not set up in this database yet
-        CouponUsage = None
-    coupon = session.exec(
-        select(Coupon).where(Coupon.code == coupon_code.strip().upper())
-    ).first()
-    if not coupon:
-        return  # Will be caught later by validate_coupon_server_side
-
-    usage_limit = getattr(coupon, "usage_limit", None)
-    used_count = getattr(coupon, "used_count", 0) or 0
-    per_user_limit = getattr(coupon, "per_user_limit", None)
-
-    # Global usage limit
-    if usage_limit is not None and used_count >= usage_limit:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Coupon '{coupon.code}' has reached its maximum usage limit."
-        )
-
-    # Per-user limit
-    if CouponUsage is not None and per_user_limit and per_user_limit > 0 and customer_email:
-        user_uses = session.exec(
-            select(CouponUsage).where(
-                CouponUsage.coupon_code == coupon.code,
-                CouponUsage.customer_email == customer_email.lower(),
-            )
-        ).all()
-        if len(user_uses) >= per_user_limit:
-            raise HTTPException(
-                status_code=400,
-                detail=f"You have already used coupon '{coupon.code}' the maximum number of times."
-            )
-
-
-def increment_coupon_usage(coupon_code: str, customer_email: str, order_id: str, session: Session):
-    """
-    Atomically increment used_count on the coupon and insert a CouponUsage row.
-    Call this AFTER the order has been committed.
-    """
-    if not coupon_code:
-        return
-    from models import Coupon
-    try:
-        from models import CouponUsage
-    except ImportError:  # usage tracking not set up in this database yet
-        return
-    coupon = session.exec(
-        select(Coupon).where(Coupon.code == coupon_code.strip().upper())
-    ).first()
-    if not coupon:
-        return
-    coupon.used_count = (coupon.used_count or 0) + 1
-    session.add(coupon)
-    usage = CouponUsage(
-        coupon_code=coupon.code,
-        customer_email=(customer_email or "").lower(),
-        order_id=order_id,
-    )
-    session.add(usage)
-    session.commit()
-    print(f"🎟️  Coupon {coupon.code} usage: {coupon.used_count}/{coupon.usage_limit or '∞'}")
 
 
 def recalculate_amount_server_side(items: list, session: Session) -> float:
     """
-    🔒 SECURITY: Recalculate total amount from DB product/variant prices.
+    🔒 SECURITY: Recalculate total amount from DB product prices.
     Never trust frontend-supplied amounts for order creation.
-    
-    Priority:
-    1. If variantId is a valid integer → look up ProductVariant price from DB
-    2. If variant has its own price → use it; otherwise fall back to product.price
-    3. Validate: selling price must not exceed product MRP
-    
     Returns the verified total amount.
     """
-    from models import Product, ProductVariant
+    from models import Product
     total = 0.0
     for item in items:
         product_id = item.get("productId")
         quantity = item.get("quantity", 1)
-        variant_id = item.get("variantId")
         if not product_id:
             continue
         product = session.get(Product, product_id)
-        if not product:
+        if product:
+            price = product.price if product.price is not None else 0
+            # Validate: selling price must not exceed MRP
+            if product.mrp is not None and price > product.mrp:
+                print(f"⚠️ PRICE INTEGRITY: Product {product_id} price ({price}) > MRP ({product.mrp}). Using MRP.")
+                price = product.mrp
+            total += price * quantity
+        else:
             raise HTTPException(status_code=400, detail=f"Product {product_id} not found")
-        
-        # Start with product base price
-        price = product.price if product.price is not None else 0
-        
-        # Check if a real ProductVariant exists with a different price
-        if variant_id:
-            variant = None
-            # Try integer ID lookup (real DB variant)
-            try:
-                vid = int(variant_id)
-                variant = session.get(ProductVariant, vid)
-            except (ValueError, TypeError):
-                pass
-            
-            # If variant found and has its own price, use it
-            if variant and variant.price is not None:
-                price = variant.price
-                print(f"🔄 Using variant price: ₹{price} (variant_id={variant_id}) instead of product price ₹{product.price}")
-        
-        # Validate: selling price must not exceed MRP
-        if product.mrp is not None and price > product.mrp:
-            print(f"⚠️ PRICE INTEGRITY: Product {product_id} price ({price}) > MRP ({product.mrp}). Using MRP.")
-            price = product.mrp
-            
-        # 🔒 SECURITY: Overwrite the frontend-supplied price with the DB-verified price
-        # This ensures items_json always reflects the actual charged price
-        item["price"] = price
-        
-        total += price * quantity
-        print(f"🧮 Price calc: {product_id} × {quantity} @ ₹{price} = ₹{price * quantity}")
-    
-    print(f"🧮 Server-side verified total: ₹{round(total, 2)}")
     return round(total, 2)
 
 
-def validate_coupon_server_side(coupon_code: str, subtotal: float, session: Session) -> float:
+def validate_coupon_server_side(coupon_code: str, subtotal: float, session: Session, payment_method: Optional[str] = None, items: Optional[list] = None) -> float:
     """
     🔒 SECURITY: Validate coupon on the server side and return the discount amount.
     Returns 0 if coupon is invalid/inactive/empty.
@@ -383,6 +257,19 @@ def validate_coupon_server_side(coupon_code: str, subtotal: float, session: Sess
     if not coupon or not coupon.is_active:
         return 0.0
 
+    # Enforce the coupon's own payment-method restriction
+    restriction = (getattr(coupon, "payment_method_restriction", None) or "none").lower()
+    if payment_method and restriction != "none":
+        pm = payment_method.lower()
+        prepaid_methods = ("prepaid", "online", "razorpay", "phonepe", "upi")
+        ok = (
+            (restriction == "prepaid_only" and pm in prepaid_methods) or
+            (restriction == "upi_only" and pm in ("upi", "phonepe")) or
+            (restriction == "cod_only" and pm == "cod")
+        )
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"Coupon {coupon.code} is not valid for this payment method")
+
     # Check minimum order amount (if set on coupon)
     min_order = getattr(coupon, 'min_order_amount', None)
     if min_order and subtotal < min_order:
@@ -396,6 +283,10 @@ def validate_coupon_server_side(coupon_code: str, subtotal: float, session: Sess
         discount = min(coupon.discount_value, subtotal)  # Can't discount more than subtotal
     elif coupon.discount_type == "flat_price":
         discount = max(0, round(subtotal - coupon.discount_value, 2))
+    elif coupon.discount_type == "bogo":
+        # Buy-One-Get-One: cheaper unit of every pair is free (needs the item list)
+        from coupon_rules import bogo_discount
+        discount = bogo_discount(items or [])
 
     # Cap discount: never allow final amount to go below ₹1
     max_allowed_discount = max(0, subtotal - 1)
@@ -489,562 +380,618 @@ def validate_promotion_restrictions(coupon_code: str, subtotal: float, payment_m
                         )
 
 
-def check_if_shipping_override_needed(items: list, session: Session) -> bool:
-    """
-    Check if any individual product in the cart is priced below the minimum threshold.
-    If yes, a mandatory shipping fee must be applied regardless of cart value.
-    
-    Returns:
-        True if shipping override is needed, False otherwise
-    """
-    from models import Product
-    
-    # Get store settings for the minimum price threshold
-    settings = session.get(StoreSettings, 1)
-    if not settings:
-        return False
-    
-    min_price = settings.minimum_product_price_for_free_shipping or 99.0
-    
-    # Check each product in the cart
-    for item in items:
-        product_id = item.get("productId")
-        if not product_id:
-            continue
-        
-        product = session.get(Product, product_id)
-        if product:
-            price = product.price if product.price is not None else 0
-            # If any product is below the threshold, shipping is needed
-            if price < min_price:
-                print(f"🚚 Shipping Override: Product {product_id} (₹{price}) is below ₹{min_price} threshold - mandatory shipping applies")
-                return True
-    
-    return False
-
-
-def get_mandatory_shipping_charge(session: Session) -> float:
-    """
-    Get the mandatory shipping charge amount from store settings.
-    
-    Returns:
-        The shipping charge amount in rupees
-    """
-    settings = session.get(StoreSettings, 1)
-    if not settings:
-        return 50.0  # Default fallback
-    
-    charge = settings.mandatory_shipping_charge or 50.0
-    print(f"🚚 Mandatory Shipping Charge: ₹{charge}")
-    return charge
-
-
 # --- Routes ---
 
-@router.post("/api/create-cod-order")
-def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
-    # ================================================================
-    # AUTH: Identify user from token (Local JWT or Supabase JWT)
-    # ================================================================
-    user_id = None       # Supabase UUID (for Order.user_id)
-    user_email = None    # Email from Supabase
-    local_customer = None  # Customer table record
+# Delivery fee rule:
+#   order value (after coupon) >= FREE_DELIVERY_MIN -> no fee
+#   below that: online payment -> free, COD -> COD_CHARGE
+COD_CHARGE = float(os.getenv("COD_CHARGE", "99"))
+FREE_DELIVERY_MIN = float(os.getenv("FREE_DELIVERY_MIN", "499"))
 
-    # 1. Try Local JWT first (Firebase / email-password users)
-    if token:
-        try:
-            from auth_utils import ALGORITHM, SECRET_KEY
-            from jose import jwt as jose_jwt
-            payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            if payload.get("role") == "customer":
-                local_customer = session.exec(
-                    select(Customer).where(Customer.email == payload.get("sub"))
-                ).first()
-        except Exception:
-            pass  # Not a local JWT, try Supabase next
 
-    # 2. Try Supabase token (Google / social login users)
-    if token and not local_customer:
-        try:
-            from supabase_utils import init_supabase
-            s_client = init_supabase()
-            if s_client:
-                user_data_sb = s_client.auth.get_user(token)
-                if user_data_sb and user_data_sb.user:
-                    user_id = user_data_sb.user.id        # Supabase UUID
-                    user_email = user_data_sb.user.email  # Supabase email
+def _short_id() -> str:
+    return uuid.uuid4().hex[:6].upper()
 
-                    # Find Customer by Supabase UID
-                    local_customer = session.exec(
-                        select(Customer).where(Customer.supabase_uid == str(user_id))
-                    ).first()
 
-                    # Fallback: Find by email (old accounts without UID linked)
-                    if not local_customer and user_email:
-                        local_customer = session.exec(
-                            select(Customer).where(Customer.email == user_email)
-                        ).first()
-                        if local_customer:
-                            # Link Supabase UID to existing account
-                            local_customer.supabase_uid = str(user_id)
-                            session.add(local_customer)
-                            session.commit()
-                            session.refresh(local_customer)
-
-                    # Create Customer record if not found (Supabase user, no local record)
-                    if not local_customer:
-                        local_customer = Customer(
-                            full_name=order_data.name,
-                            email=user_email or order_data.email,
-                            phone=order_data.contact,
-                            provider="google",
-                            supabase_uid=str(user_id),
-                            is_active=True
-                        )
-                        session.add(local_customer)
-                        session.commit()
-                        session.refresh(local_customer)
-                        print(f"✅ Created Customer for Supabase user: {local_customer.id}")
-        except Exception as e:
-            # Allow order creation without user_id for guest checkout
-            print(f"Auth token check: {e}")
-            pass
-
-    # 3. Guest fallback — find or create Customer by email
-    if not local_customer:
-        local_customer = session.exec(
-            select(Customer).where(Customer.email == order_data.email)
-        ).first()
-        if not local_customer:
-            local_customer = Customer(
-                full_name=order_data.name,
-                email=order_data.email,
-                phone=order_data.contact,
-                provider="guest",
-                is_active=True
-            )
-            session.add(local_customer)
-            session.commit()
-
-    # Generate Order ID (with random suffix to prevent collision)
-    order_id_str = f"ORD-{int(time.time())}-{uuid.uuid4().hex[:6]}"
-    
-    items_list = []
-    if order_data.items:
-        items_list = [item.model_dump() for item in order_data.items]
-    else:
-        from models import Product as ProductModel
-        _pid = order_data.productId
-        _db_prod = session.get(ProductModel, _pid) if _pid else None
-        _pname = _db_prod.name if _db_prod else "Jewellery Item"
-        # Use DB product price, not frontend-supplied amount
-        _db_price = _db_prod.price if _db_prod and _db_prod.price is not None else 0
-        items_list = [{
-            "productId": order_data.productId,
-            "productName": _pname,
-            "variantId": order_data.variantId,
-            "quantity": order_data.quantity,
-            "price": _db_price
-        }]
-
-    # 🔒 SERVER-SIDE PRICE RECALCULATION — never trust frontend amounts
-    # This function ALSO mutates items_list to sync item["price"] with DB-verified prices
-    verified_amount = recalculate_amount_server_side(items_list, session)
-
-    # REGION BLOCK CHECK - reject orders for blocked delivery states
-    validate_delivery_state_not_blocked(order_data.state, session)
-
-    # SERVER-SIDE COUPON VALIDATION
-    coupon_discount = validate_coupon_server_side(order_data.couponCode, verified_amount, session)
-    verified_amount = max(0, verified_amount - coupon_discount)
-
-    # 🔒 PROMOTION RESTRICTION VALIDATION (payment method, min cart, category)
-    validate_promotion_restrictions(order_data.couponCode, verified_amount + coupon_discount, "cod", items_list, session)
-
-    # 🚚 PRICE-BASED SHIPPING OVERRIDE: Check if any product is below ₹99 threshold
-    shipping_charge = 0.0
-    if check_if_shipping_override_needed(items_list, session):
-        shipping_charge = get_mandatory_shipping_charge(session)
-        print(f"🚚 Added mandatory shipping charge: ₹{shipping_charge}")
-
-    # Calculate Total Amount including COD charges + Shipping Override
-    final_amount = verified_amount + shipping_charge
-    if order_data.codCharges:
-        final_amount += order_data.codCharges
-
-    # Calculate Tax (using verified amount, not frontend amount)
-    tax_data = calculate_tax_breakdown(final_amount, order_data.state)
-
-    # Fix #3 — Coupon usage limit check (global + per user)
-    validate_coupon_usage_limit(order_data.couponCode, order_data.email, session)
-
-    # Fix #2 — STOCK RE-VALIDATION: re-read stock atomically right before order insert
+def build_server_items(order_data, session: Session) -> list:
+    """
+    🔒 Build the item list from the DB (name + price), never from the browser.
+    Accepts an OrderCreate or a plain dict.
+    """
     from models import Product
-    for item in items_list:
+    get = (lambda k, d=None: order_data.get(k, d)) if isinstance(order_data, dict) else (lambda k, d=None: getattr(order_data, k, d))
+
+    raw_items = get("items") or []
+    if not raw_items and get("productId"):
+        raw_items = [{
+            "productId": get("productId"),
+            "variantId": get("variantId"),
+            "quantity": get("quantity") or 1,
+        }]
+    if not raw_items:
+        raise HTTPException(status_code=400, detail="No items in order")
+
+    items = []
+    for it in raw_items:
+        if not isinstance(it, dict):
+            it = it.dict()
+        pid = it.get("productId")
+        try:
+            qty = int(it.get("quantity") or 1)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid quantity")
+        if qty < 1 or qty > MAX_QTY_PER_ITEM:
+            raise HTTPException(status_code=400, detail="Invalid quantity")
+        product = session.get(Product, pid) if pid else None
+        if not product:
+            raise HTTPException(status_code=400, detail=f"Product {pid} not found")
+        price = product.price if product.price is not None else 0
+        if product.mrp is not None and price > product.mrp:
+            price = product.mrp
+        items.append({
+            "productId": product.id,
+            "productName": product.name,
+            "variantId": it.get("variantId"),
+            "variantName": it.get("variantName"),
+            "quantity": qty,
+            "price": float(price),
+        })
+    return items
+
+
+def validate_delivery_state_not_blocked(state: Optional[str], session: Session):
+    """Raise 403 if the delivery state is in the blocked regions list."""
+    if not state:
+        return
+    from models import BlockedRegion
+    blocked = session.exec(
+        select(BlockedRegion).where(BlockedRegion.is_blocked == True)
+    ).all()
+    blocked_names = {r.region_name.strip().lower() for r in blocked}
+    if state.strip().lower() in blocked_names:
+        raise HTTPException(
+            status_code=403,
+            detail=f"We currently do not deliver to {state.strip().title()}. We apologize for the inconvenience."
+        )
+
+
+def check_stock(items: list, session: Session):
+    from models import Product
+    for item in items:
         product = session.get(Product, item.get("productId"))
-        if product:
-            qty = item.get("quantity", 1)
-            if product.stock is not None and product.stock <= 0:
+        if product and product.stock is not None:
+            if product.stock <= 0:
                 raise HTTPException(status_code=400, detail=f"{product.name} is out of stock")
-            if product.stock is not None and qty > product.stock:
+            if item["quantity"] > product.stock:
                 raise HTTPException(status_code=400, detail=f"{product.name}: only {product.stock} left in stock")
 
-    new_order = Order(
-        order_id=order_id_str,
-        customer_name=order_data.name,
-        email=order_data.email,
-        phone=order_data.contact,
-        address=order_data.address,
-        city=order_data.city,
-        pincode=order_data.pincode,
-        total_amount=final_amount,
-        original_amount=verified_amount + coupon_discount,  # pre-coupon server-verified amount
-        discount_amount=coupon_discount,                    # coupon discount applied
-        payment_method="cod",
-        status="pending",
-        user_id=uuid.UUID(user_id) if user_id else None,
-        items_json=json.dumps(items_list),
-        
-        # Tax Fields
-        state=order_data.state,
+
+def compute_pricing(items: list, coupon_code: Optional[str], payment_method: str, session: Session, cust: Optional[dict] = None) -> dict:
+    """
+    🔒 Single source of truth for order amounts.
+    payment_method: 'cod' or 'prepaid'
+    """
+    subtotal = round(sum(i["price"] * i["quantity"] for i in items), 2)
+    coupon_code = (coupon_code or "").strip()
+    if coupon_code:
+        # Expiry / start date / total + per-customer usage limits
+        from coupon_rules import check_coupon_rules
+        check_coupon_rules(session, coupon_code, (cust or {}).get("email"), (cust or {}).get("contact"))
+    coupon_discount = validate_coupon_server_side(coupon_code, subtotal, session, payment_method, items)
+    validate_promotion_restrictions(coupon_code, subtotal, payment_method, items, session)
+    after_coupon = max(0.0, round(subtotal - coupon_discount, 2))
+
+    prepaid_discount = 0.0
+    cod_charge = 0.0
+    if payment_method == "cod":
+        cod_charge = 0.0 if after_coupon >= FREE_DELIVERY_MIN else COD_CHARGE
+    else:
+        prepaid_discount = calculate_prepaid_discount(after_coupon, "online", session)
+
+    total = round(max(1.0, after_coupon - prepaid_discount + cod_charge), 2)
+    return {
+        "subtotal": subtotal,
+        "coupon_code": coupon_code.upper() if coupon_discount > 0 else None,
+        "coupon_discount": coupon_discount,
+        "prepaid_discount": prepaid_discount,
+        "cod_charge": cod_charge,
+        "total": total,
+    }
+
+
+def _order_payload(session: Session, order) -> dict:
+    """Order as a plain dict for notifications.
+    Later commits (stock, address) expire the object, and .dict() on an expired
+    object is empty - the emails/Telegram then went out with no order id or email."""
+    try:
+        session.refresh(order)
+    except Exception:
+        pass
+    return order.model_dump()
+
+
+def _customer_fields(order_data) -> dict:
+    get = (lambda k, d=None: order_data.get(k, d)) if isinstance(order_data, dict) else (lambda k, d=None: getattr(order_data, k, d))
+    email = (get("email") or "").strip()
+    return {
+        "name": (get("name") or "").strip(),
+        "email": email,
+        "contact": (get("contact") or "").strip(),
+        "address": (get("address") or "").strip(),
+        "city": (get("city") or "").strip(),
+        "state": (get("state") or "").strip(),
+        "pincode": (get("pincode") or "").strip(),
+    }
+
+
+def _ensure_customer(session: Session, cust: dict, ident: dict):
+    """Return the logged-in customer, or find/create a guest customer by email."""
+    if ident.get("customer"):
+        return ident["customer"]
+    if not cust["email"]:
+        return None
+    existing = session.exec(select(Customer).where(Customer.email == cust["email"])).first()
+    if existing:
+        return existing
+    guest = Customer(full_name=cust["name"] or "Guest", email=cust["email"], phone=cust["contact"], provider="guest", is_active=True)
+    session.add(guest)
+    session.commit()
+    session.refresh(guest)
+    return guest
+
+
+def _auto_save_address(session: Session, customer, cust: dict):
+    if not customer or customer.provider == "guest":
+        return
+    try:
+        from models import Address
+        existing_addr = session.exec(
+            select(Address).where(
+                Address.customer_id == customer.id,
+                Address.pincode == cust["pincode"],
+                Address.address_line1 == cust["address"]
+            )
+        ).first()
+        if not existing_addr:
+            has_any_address = session.exec(select(Address).where(Address.customer_id == customer.id)).first()
+            session.add(Address(
+                customer_id=customer.id,
+                label="Home",
+                full_name=cust["name"],
+                phone=cust["contact"],
+                address_line1=cust["address"],
+                city=cust["city"],
+                state=cust["state"] or "Rajasthan",
+                pincode=cust["pincode"],
+                is_default=(not has_any_address),
+                address_type="both"
+            ))
+            session.commit()
+    except Exception as e:
+        session.rollback()
+        print(f"⚠️ Address auto-save failed (non-blocking): {e}")
+
+
+def _create_order_record(session: Session, *, order_id: str, cust: dict, items: list, pricing: dict,
+                         payment_method: str, status: str, user_id: Optional[str], comment: str) -> Order:
+    tax_data = calculate_tax_breakdown(pricing["total"], cust["state"])
+    uid = None
+    if user_id:
+        try:
+            uid = uuid.UUID(str(user_id))
+        except ValueError:
+            uid = None
+    extra = []
+    if pricing.get("coupon_discount"):
+        extra.append(f"Coupon: {pricing.get('coupon_code')} (-₹{pricing['coupon_discount']})")
+    if pricing.get("prepaid_discount"):
+        extra.append(f"Prepaid Discount: -₹{pricing['prepaid_discount']}")
+    if pricing.get("cod_charge"):
+        extra.append(f"COD Charge: +₹{pricing['cod_charge']}")
+    order = Order(
+        order_id=order_id,
+        customer_name=cust["name"],
+        email=cust["email"],
+        phone=cust["contact"],
+        address=cust["address"],
+        city=cust["city"],
+        pincode=cust["pincode"],
+        total_amount=pricing["total"],
+        original_amount=pricing["subtotal"],
+        discount_amount=round(pricing.get("coupon_discount", 0) + pricing.get("prepaid_discount", 0), 2),
+        payment_method=payment_method,
+        status=status,
+        email_status="pending",
+        user_id=uid,
+        items_json=json.dumps(items),
+        state=cust["state"],
         hsn_code=tax_data["hsn_code"],
         taxable_value=tax_data["taxable_value"],
         cgst_amount=tax_data["cgst_amount"],
         sgst_amount=tax_data["sgst_amount"],
         igst_amount=tax_data["igst_amount"],
-        
         status_history=json.dumps([{
-            "status": "pending",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "comment": "Order placed via COD" + (f" | Coupon: {order_data.couponCode} (-₹{coupon_discount})" if coupon_discount > 0 else "")
+            "status": status,
+            "timestamp": datetime.utcnow().isoformat(),
+            "comment": comment + (" | " + " | ".join(extra) if extra else "")
         }])
     )
-    
-    session.add(new_order)
+    session.add(order)
     session.commit()
-    session.refresh(new_order)
+    session.refresh(order)
 
-    # Deduct Stock for ordered items + write Inventory (Fix #4)
-    deduct_stock_for_items(items_list, new_order.order_id, session)
-
-    # Increment coupon usage count (Fix #3)
-    if order_data.couponCode and coupon_discount > 0:
-        increment_coupon_usage(order_data.couponCode, order_data.email, new_order.order_id, session)
-
-    # ================================================================
-    # AUTO-SAVE ADDRESS to Address Book for logged-in users
-    # (Supabase users + Firebase users — NOT guests)
-    # ================================================================
-    is_logged_in_user = local_customer and local_customer.provider != "guest"
-    if is_logged_in_user:
+    # Count coupon usage (for usage limits)
+    if pricing.get("coupon_code") and pricing.get("coupon_discount"):
         try:
-            from models import Address
-            # Save only if this address doesn't already exist for this customer
-            existing_addr = session.exec(
-                select(Address).where(
-                    Address.customer_id == local_customer.id,
-                    Address.pincode == order_data.pincode,
-                    Address.address_line1 == order_data.address
-                )
-            ).first()
-
-            if not existing_addr:
-                # First address ever? Make it default
-                has_any_address = session.exec(
-                    select(Address).where(Address.customer_id == local_customer.id)
-                ).first()
-
-                new_addr = Address(
-                    customer_id=local_customer.id,
-                    label="Home",
-                    full_name=order_data.name,
-                    phone=order_data.contact,
-                    address_line1=order_data.address,
-                    city=order_data.city,
-                    state=order_data.state or "Rajasthan",
-                    pincode=order_data.pincode,
-                    is_default=(not has_any_address),  # First = default
-                    address_type="both"
-                )
-                session.add(new_addr)
-                session.commit()
-                print(f"✅ Address auto-saved for customer {local_customer.id}")
+            from coupon_rules import record_coupon_usage
+            record_coupon_usage(session, pricing["coupon_code"], order.order_id, cust.get("email"), cust.get("contact"))
         except Exception as e:
-            print(f"⚠️ Address auto-save failed (non-blocking): {e}")
+            session.rollback()
+            print(f"⚠️ Coupon usage record failed: {e}")
+    return order
 
-    # Notify
-    background_tasks.add_task(send_order_notifications, new_order.order_id)
-    
-    return {"ok": True, "orderId": new_order.order_id}
+
+def _order_response(order: Order) -> dict:
+    from order_access import order_access_key
+    return {
+        "ok": True,
+        "orderId": order.order_id,
+        "amount": order.total_amount,
+        "accessKey": order_access_key(order.order_id),
+    }
+
+
+@router.post("/api/create-cod-order")
+def create_cod_order(order_data: OrderCreate, background_tasks: BackgroundTasks, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+    from order_access import resolve_identity
+    ident = resolve_identity(token, session)
+    cust = _customer_fields(order_data)
+    if not cust["email"] or not cust["contact"] or not cust["address"] or not cust["pincode"]:
+        raise HTTPException(status_code=400, detail="Please fill all required fields")
+
+    # 🔒 Everything below is calculated on the server
+    items = build_server_items(order_data, session)
+    check_stock(items, session)
+    validate_delivery_state_not_blocked(order_data.state, session)
+    pricing = compute_pricing(items, order_data.couponCode, "cod", session, cust)
+
+    customer = _ensure_customer(session, cust, ident)
+
+    order = _create_order_record(
+        session,
+        order_id=f"ORD-{int(time.time())}-{_short_id()}",   # unique even for same-second orders
+        cust=cust, items=items, pricing=pricing,
+        payment_method="cod", status="pending",
+        user_id=ident.get("supabase_uid"),
+        comment="Order placed via COD",
+    )
+    deduct_stock_for_items(items, session, order.order_id)
+    _auto_save_address(session, customer, cust)
+    background_tasks.add_task(send_order_notifications, _order_payload(session, order))
+    return _order_response(order)
+
+
+# ---------------------------------------------------------------------------
+# Online payments (Razorpay / PhonePe)
+# ---------------------------------------------------------------------------
+
+def _get_gateway(session: Session, provider: str) -> Optional[PaymentGateway]:
+    gw = session.exec(select(PaymentGateway).where(PaymentGateway.provider == provider, PaymentGateway.is_active == True)).first()
+    if not gw:
+        gw = session.exec(select(PaymentGateway).where(PaymentGateway.provider == provider)).first()
+    return gw
+
+
+def _phonepe_urls(creds: dict):
+    environment = (creds.get("environment") or "SANDBOX").upper()
+    if environment == "PRODUCTION":
+        return ("https://api.phonepe.com/apis/identity-manager/v1/oauth/token",
+                "https://api.phonepe.com/apis/pg/checkout/v2/pay",
+                "https://api.phonepe.com/apis/pg/checkout/v2/order/{}/status")
+    return ("https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token",
+            "https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/pay",
+            "https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/order/{}/status")
+
+
+def _phonepe_token(creds: dict) -> str:
+    import requests
+    client_id = creds.get("client_id") or creds.get("merchant_id")
+    client_secret = creds.get("client_secret") or creds.get("salt_key")
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=500, detail="PhonePe credentials not configured properly")
+    auth_url, _, _ = _phonepe_urls(creds)
+    auth_data = requests.post(
+        auth_url,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data={
+            "client_id": client_id,
+            "client_version": creds.get("client_version", "1"),
+            "client_secret": client_secret,
+            "grant_type": "client_credentials"
+        },
+        timeout=30
+    ).json()
+    if not auth_data.get("access_token"):
+        msg = auth_data.get("message") or auth_data.get("error_description") or "Failed to get access token"
+        raise HTTPException(status_code=400, detail=f"PhonePe Auth: {msg}")
+    return auth_data["access_token"]
+
+
+def _phonepe_status(creds: dict, merchant_order_id: str) -> dict:
+    import requests
+    token = _phonepe_token(creds)
+    _, _, status_tpl = _phonepe_urls(creds)
+    return requests.get(
+        status_tpl.format(merchant_order_id),
+        headers={"Content-Type": "application/json", "Authorization": f"O-Bearer {token}"},
+        timeout=30
+    ).json()
+
+
+def _finalize_pending(session: Session, pending, payment_ref: str, background_tasks: Optional[BackgroundTasks]) -> Order:
+    """
+    Create the paid order from the server-side PendingCheckout (idempotent).
+    Call ONLY after the gateway confirmed the exact amount was paid.
+    """
+    from models import PendingCheckout
+    # Re-read with a row lock so a webhook + browser callback can't double-create
+    try:
+        pending = session.exec(
+            select(PendingCheckout).where(PendingCheckout.gateway_order_id == pending.gateway_order_id).with_for_update()
+        ).first() or pending
+    except Exception:
+        pass
+
+    if pending.order_id:
+        existing = session.exec(select(Order).where(Order.order_id == pending.order_id)).first()
+        if existing:
+            return existing
+
+    if pending.provider == "razorpay":
+        order_id = f"ORD-{pending.gateway_order_id.replace('order_', '')}"
+    else:
+        order_id = pending.gateway_order_id
+
+    existing = session.exec(select(Order).where(Order.order_id == order_id)).first()
+    if existing:
+        pending.order_id = existing.order_id
+        session.add(pending)
+        session.commit()
+        return existing
+
+    cust = json.loads(pending.order_data_json or "{}")
+    items = json.loads(pending.items_json or "[]")
+    pricing = {
+        "subtotal": pending.subtotal,
+        "coupon_code": pending.coupon_code,
+        "coupon_discount": pending.coupon_discount,
+        "prepaid_discount": pending.prepaid_discount,
+        "cod_charge": 0.0,
+        "total": pending.amount,
+    }
+    order = _create_order_record(
+        session,
+        order_id=order_id, cust=cust, items=items, pricing=pricing,
+        payment_method="online", status="paid",
+        user_id=pending.user_id,
+        comment=f"Payment via {pending.provider.title()}. Ref: {payment_ref}",
+    )
+    pending.order_id = order.order_id
+    session.add(pending)
+    session.commit()
+
+    deduct_stock_for_items(items, session, order.order_id)
+    try:
+        customer = session.exec(select(Customer).where(Customer.email == cust.get("email"))).first()
+        _auto_save_address(session, customer, cust)
+    except Exception:
+        pass
+
+    payload = _order_payload(session, order)
+    if background_tasks is not None:
+        background_tasks.add_task(send_order_notifications, payload)
+    else:
+        try:
+            send_order_notifications(payload)
+        except Exception as e:
+            print(f"Notification error: {e}")
+    return order
+
 
 @router.post("/api/create-checkout-session")
 def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
-    # 1. Find Active Gateway
+    from models import PendingCheckout
+    from order_access import resolve_identity
+
     gateway = session.exec(select(PaymentGateway).where(PaymentGateway.is_active == True)).first()
-    
     if not gateway:
         raise HTTPException(status_code=400, detail="No active payment gateway found. Please contact support.")
 
-    # AUTH CHECK: Put user_id in notes if logged in
-    user_id = None
-    try:
-        from supabase_utils import init_supabase
-        s_client = init_supabase()
-        if token and s_client:
-            user_data_sb = s_client.auth.get_user(token)
-            if user_data_sb and user_data_sb.user:
-                user_id = str(user_data_sb.user.id)
-    except:
-        pass
+    ident = resolve_identity(token, session)
+    cust = _customer_fields(order_data)
+    if not cust["email"] or not cust["contact"] or not cust["address"] or not cust["pincode"]:
+        raise HTTPException(status_code=400, detail="Please fill all required fields")
 
-    creds = json.loads(gateway.credentials_json)
-
-    # 🔴 STOCK VALIDATION — check before creating payment session
-    from models import Product as ProductModel
-    if order_data.items:
-        for item in order_data.items:
-            product = session.get(ProductModel, item.productId)
-            if product:
-                if product.stock is not None and product.stock <= 0:
-                    raise HTTPException(status_code=400, detail=f"{product.name} is out of stock")
-                if product.stock is not None and item.quantity > product.stock:
-                    raise HTTPException(status_code=400, detail=f"{product.name}: only {product.stock} left in stock")
-    elif order_data.productId:
-        product = session.get(ProductModel, order_data.productId)
-        qty = order_data.quantity or 1
-        if product:
-            if product.stock is not None and product.stock <= 0:
-                raise HTTPException(status_code=400, detail=f"{product.name} is out of stock")
-            if product.stock is not None and qty > product.stock:
-                raise HTTPException(status_code=400, detail=f"{product.name}: only {product.stock} left in stock")
-
-    # 🔒 SERVER-SIDE PRICE RECALCULATION for payment session
-    items_for_calc = []
-    if order_data.items:
-        items_for_calc = [item.model_dump() for item in order_data.items]
-    elif order_data.productId:
-        items_for_calc = [{"productId": order_data.productId, "quantity": order_data.quantity or 1}]
-    
-    verified_amount = recalculate_amount_server_side(items_for_calc, session) if items_for_calc else order_data.amount
-    coupon_discount = validate_coupon_server_side(order_data.couponCode, verified_amount, session)
-    verified_amount = max(0, verified_amount - coupon_discount)
-
-    # REGION BLOCK CHECK - reject payments for blocked delivery states
+    # 🔒 Server-side items, stock, and amount (incl. coupon + prepaid discount)
+    items = build_server_items(order_data, session)
+    check_stock(items, session)
     validate_delivery_state_not_blocked(order_data.state, session)
+    pricing = compute_pricing(items, order_data.couponCode, "prepaid", session, cust)
+    amount_paise = int(round(pricing["total"] * 100))
 
-    # PROMOTION RESTRICTION VALIDATION (payment method, min cart, category)
-    validate_promotion_restrictions(order_data.couponCode, verified_amount + coupon_discount, "prepaid", items_for_calc, session)
+    creds = json.loads(gateway.credentials_json or "{}")
 
-    # 🚚 PRICE-BASED SHIPPING OVERRIDE: Check if any product is below ₹99 threshold
-    if check_if_shipping_override_needed(items_for_calc, session):
-        shipping_charge = get_mandatory_shipping_charge(session)
-        verified_amount += shipping_charge
-        print(f"🚚 Added mandatory shipping charge: ₹{shipping_charge} | New total: ₹{verified_amount}")
+    def save_pending(gateway_order_id: str):
+        session.add(PendingCheckout(
+            gateway_order_id=gateway_order_id,
+            provider=gateway.provider,
+            order_data_json=json.dumps(cust),
+            items_json=json.dumps(items),
+            subtotal=pricing["subtotal"],
+            coupon_code=pricing["coupon_code"],
+            coupon_discount=pricing["coupon_discount"],
+            prepaid_discount=pricing["prepaid_discount"],
+            amount=pricing["total"],
+            amount_paise=amount_paise,
+            user_id=ident.get("supabase_uid"),
+        ))
+        session.commit()
 
-    # 2. Initialize Provider
     if gateway.provider == "razorpay":
+        key_id = (creds.get("key_id") or "").strip()
+        key_secret = (creds.get("key_secret") or "").strip()
+        if not key_id or key_id == "undefined" or not key_secret or key_secret == "undefined":
+            raise HTTPException(status_code=400, detail="Razorpay credentials are not configured. Please set your Key ID and Key Secret in Admin → Settings → Payment Gateways.")
         try:
-            key_id = (creds.get("key_id") or "").strip()
-            key_secret = (creds.get("key_secret") or "").strip()
-            if not key_id or key_id == "undefined" or not key_secret or key_secret == "undefined":
-                raise HTTPException(status_code=400, detail="Razorpay credentials are not configured. Please set your Key ID and Key Secret in Admin → Settings → Payment Gateways.")
             client = razorpay.Client(auth=(key_id, key_secret))
-            
-            notes = {
-                "email": order_data.email,
-                "phone": order_data.contact
-            }
-            if user_id:
-                notes["user_id"] = user_id
-            
-            data = {
-                "amount": int(verified_amount * 100), # Amount in paise — using VERIFIED amount
+            notes = {"email": cust["email"], "phone": cust["contact"]}
+            if ident.get("supabase_uid"):
+                notes["user_id"] = ident["supabase_uid"]
+            razorpay_order = client.order.create(data={
+                "amount": amount_paise,
                 "currency": "INR",
-                "receipt": f"rcpt_{int(time.time())}",
-                "notes": notes
-            }
-            
-            razorpay_order = client.order.create(data=data)
-            
-            return {
-                "id": razorpay_order['id'],
-                "orderId": razorpay_order['id'], # Added alias for frontend compatibility
-                "amount": razorpay_order['amount'],
-                "currency": razorpay_order['currency'],
-                "key": key_id,
-                "name": "Varaha Jewels",
-                "description": "Payment for Order",
-                "prefill": {
-                    "name": order_data.name,
-                    "email": order_data.email,
-                    "contact": order_data.contact
-                },
-                "theme": {
-                    "color": "#B8860B"
-                },
-                "provider": "razorpay"
-            }
+                "receipt": f"rcpt_{int(time.time())}_{_short_id()}",
+                "notes": notes,
+            })
         except Exception as e:
             print(f"Razorpay Error: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Gateway Error: {str(e)}")
-    
+
+        save_pending(razorpay_order["id"])
+        return {
+            "id": razorpay_order['id'],
+            "orderId": razorpay_order['id'],
+            "amount": razorpay_order['amount'],
+            "currency": razorpay_order['currency'],
+            "key": key_id,
+            "name": "Varaha Jewels",
+            "description": "Payment for Order",
+            "prefill": {"name": cust["name"], "email": cust["email"], "contact": cust["contact"]},
+            "theme": {"color": "#B8860B"},
+            "provider": "razorpay",
+            "pricing": pricing,
+        }
+
     elif gateway.provider == "phonepe":
+        import requests
         try:
-            import requests
-            
-            # Get credentials - Support both v1 (salt_key) and v2 (client_secret) formats
-            client_id = creds.get("client_id") or creds.get("merchant_id")
-            client_secret = creds.get("client_secret") or creds.get("salt_key")
-            client_version = creds.get("client_version", "1")
-            environment = creds.get("environment", "SANDBOX").upper()
-            
-            if not client_id or not client_secret:
-                raise HTTPException(status_code=500, detail="PhonePe credentials not configured properly")
-            
-            # API URLs for v2 Standard Checkout
-            # Reference: https://developer.phonepe.com/docs/pg-checkout-standard/
-            if environment == "PRODUCTION":
-                auth_url = "https://api.phonepe.com/apis/identity-manager/v1/oauth/token"
-                pay_url = "https://api.phonepe.com/apis/pg/checkout/v2/pay"
-            else:
-                # Sandbox/UAT environment
-                auth_url = "https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token"
-                pay_url = "https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/pay"
-            
-            print(f"DEBUG PhonePe: Environment={environment}, AuthURL={auth_url}")
-            print(f"DEBUG PhonePe: ClientID={client_id[:8]}..., ClientVersion={client_version}")
-            
-            # Frontend URL for redirect
             frontend_url = os.getenv("FRONTEND_URL", "https://varahajewels.in")
-            backend_url = os.getenv("BACKEND_URL", "https://backend.varahajewels.in")
-            
-            # Step 1: Get OAuth Access Token
-            auth_response = requests.post(
-                auth_url,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                data={
-                    "client_id": client_id,
-                    "client_version": client_version,
-                    "client_secret": client_secret,
-                    "grant_type": "client_credentials"
-                },
-                timeout=30
-            )
-            
-            auth_data = auth_response.json()
-            print(f"PhonePe Auth Response: {auth_data}")
-            
-            if not auth_data.get("access_token"):
-                error_msg = auth_data.get("message") or auth_data.get("error_description") or "Failed to get access token"
-                raise HTTPException(status_code=400, detail=f"PhonePe Auth: {error_msg}")
-            
-            access_token = auth_data["access_token"]
-            
-            # Step 2: Create Payment Request
             merchant_order_id = f"ORD-{int(time.time())}-{uuid.uuid4().hex[:6]}"
-            amount_in_paise = int(verified_amount * 100)  # Using VERIFIED amount
-            
-            pay_payload = {
-                "merchantOrderId": merchant_order_id,
-                "amount": amount_in_paise,
-                "expireAfter": 1200,  # 20 minutes
-                "metaInfo": {
-                    "udf1": order_data.email,
-                    "udf2": order_data.contact
-                },
-                "paymentFlow": {
-                    "type": "PG_CHECKOUT",
-                    "message": f"Payment for Order {merchant_order_id}",
-                    "merchantUrls": {
-                        "redirectUrl": f"{frontend_url}/payment-callback?orderId={merchant_order_id}"
-                    }
-                }
-            }
-            
-            pay_response = requests.post(
+            access_token = _phonepe_token(creds)
+            _, pay_url, _ = _phonepe_urls(creds)
+            pay_data = requests.post(
                 pay_url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"O-Bearer {access_token}"
+                headers={"Content-Type": "application/json", "Authorization": f"O-Bearer {access_token}"},
+                json={
+                    "merchantOrderId": merchant_order_id,
+                    "amount": amount_paise,
+                    "expireAfter": 1200,
+                    "metaInfo": {"udf1": cust["email"], "udf2": cust["contact"]},
+                    "paymentFlow": {
+                        "type": "PG_CHECKOUT",
+                        "message": f"Payment for Order {merchant_order_id}",
+                        "merchantUrls": {"redirectUrl": f"{frontend_url}/payment-callback?orderId={merchant_order_id}"}
+                    }
                 },
-                json=pay_payload,
                 timeout=30
-            )
-            
-            pay_data = pay_response.json()
-            print(f"PhonePe Pay Response: {pay_data}")
-            
-            if pay_data.get("orderId") and pay_data.get("redirectUrl"):
-                return {
-                    "provider": "phonepe",
-                    "orderId": merchant_order_id,
-                    "phonepeOrderId": pay_data.get("orderId"),
-                    "redirectUrl": pay_data.get("redirectUrl"),
-                    "amount": amount_in_paise,
-                    "currency": "INR"
-                }
-            else:
-                error_msg = pay_data.get("message") or "Payment initiation failed"
-                print(f"PhonePe Error: {pay_data}")
-                raise HTTPException(status_code=400, detail=f"PhonePe: {error_msg}")
-            
+            ).json()
         except HTTPException:
             raise
         except Exception as e:
             print(f"PhonePe Error: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"PhonePe Gateway Error: {str(e)}")
-    
+
+        if pay_data.get("orderId") and pay_data.get("redirectUrl"):
+            save_pending(merchant_order_id)
+            return {
+                "provider": "phonepe",
+                "orderId": merchant_order_id,
+                "phonepeOrderId": pay_data.get("orderId"),
+                "redirectUrl": pay_data.get("redirectUrl"),
+                "amount": amount_paise,
+                "currency": "INR",
+                "pricing": pricing,
+            }
+        print(f"PhonePe Error: {pay_data}")
+        raise HTTPException(status_code=400, detail=f"PhonePe: {pay_data.get('message') or 'Payment initiation failed'}")
+
     raise HTTPException(status_code=400, detail=f"Provider {gateway.provider} not implemented completely.")
 
 
+def _confirm_phonepe(session: Session, merchant_order_id: str, background_tasks: Optional[BackgroundTasks]) -> dict:
+    """Verify with PhonePe that the exact amount was paid, then create the order."""
+    from models import PendingCheckout
+    pending = session.get(PendingCheckout, merchant_order_id)
+    if not pending:
+        existing = session.exec(select(Order).where(Order.order_id == merchant_order_id)).first()
+        if existing:
+            return _order_response(existing)
+        raise HTTPException(status_code=404, detail="Checkout session not found. If money was deducted, please contact support with your transaction ID.")
+    if pending.order_id:
+        existing = session.exec(select(Order).where(Order.order_id == pending.order_id)).first()
+        if existing:
+            return _order_response(existing)
+
+    gateway = _get_gateway(session, "phonepe")
+    if not gateway:
+        raise HTTPException(status_code=400, detail="PhonePe gateway not configured")
+    status_data = _phonepe_status(json.loads(gateway.credentials_json or "{}"), merchant_order_id)
+    state = (status_data.get("state") or "").upper()
+    if state != "COMPLETED":
+        return {"ok": False, "status": state, "message": status_data.get("errorMessage") or "Payment not completed"}
+
+    paid = int(status_data.get("amount") or 0)
+    if paid != int(pending.amount_paise):
+        print(f"🚨 PhonePe AMOUNT MISMATCH {merchant_order_id}: paid={paid} expected={pending.amount_paise}")
+        raise HTTPException(status_code=400, detail="Payment amount mismatch. Please contact support.")
+
+    order = _finalize_pending(session, pending, merchant_order_id, background_tasks)
+    return _order_response(order)
+
+
 @router.post("/api/phonepe/callback")
-def phonepe_callback(payload: Dict[str, Any], background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
+async def phonepe_callback(request: Request, background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
     """
-    PhonePe Server-to-Server Callback
-    Called by PhonePe when payment status changes
+    PhonePe server-to-server callback. Creates the order even if the customer
+    closed the browser after paying. The payload is NOT trusted - we re-check
+    the status with PhonePe's API before creating anything.
+    Optional auth: set PHONEPE_CALLBACK_USERNAME / PHONEPE_CALLBACK_PASSWORD
+    (same values as in the PhonePe dashboard).
     """
+    import hashlib
+    import base64
+    import hmac as _hmac
+    cb_user = os.getenv("PHONEPE_CALLBACK_USERNAME")
+    cb_pass = os.getenv("PHONEPE_CALLBACK_PASSWORD")
+    if cb_user and cb_pass:
+        expected = hashlib.sha256(f"{cb_user}:{cb_pass}".encode()).hexdigest()
+        got = (request.headers.get("authorization") or "").replace("SHA256", "").strip()
+        if not _hmac.compare_digest(got, expected):
+            raise HTTPException(status_code=401, detail="Invalid callback auth")
+
     try:
-        import hashlib
-        import base64
-        
-        # Get active PhonePe gateway
-        gateway = session.exec(select(PaymentGateway).where(PaymentGateway.provider == "phonepe")).first()
-        if not gateway:
-            raise HTTPException(status_code=400, detail="PhonePe gateway not configured")
-        
-        creds = json.loads(gateway.credentials_json)
-        salt_key = creds.get("salt_key")
-        salt_index = creds.get("salt_index", "1")
-        
-        # Verify callback signature
-        x_verify = payload.get("x-verify") or payload.get("X-VERIFY", "")
-        response_base64 = payload.get("response", "")
-        
-        if response_base64:
-            # Verify signature
-            expected_checksum = hashlib.sha256((response_base64 + "/pg/v1/status" + salt_key).encode()).hexdigest() + "###" + salt_index
-            
-            # Decode response
-            response_json = base64.b64decode(response_base64).decode()
-            response_data = json.loads(response_json)
-            
-            print(f"PhonePe Callback Data: {response_data}")
-            
-            if response_data.get("code") == "PAYMENT_SUCCESS":
-                transaction_id = response_data.get("data", {}).get("merchantTransactionId")
-                phonepe_txn_id = response_data.get("data", {}).get("transactionId")
-                
-                # TODO: Create order in database similar to Razorpay callback
-                # For now, log success
-                print(f"PhonePe Payment SUCCESS: TxnID={transaction_id}, PhonePeTxnID={phonepe_txn_id}")
-                
-                return {"status": "success", "message": "Payment received"}
-            else:
-                print(f"PhonePe Payment Status: {response_data.get('code')}")
-                return {"status": "received", "code": response_data.get("code")}
-        
-        return {"status": "received"}
-        
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    merchant_order_id = None
+    try:
+        inner = payload.get("payload") or {}
+        merchant_order_id = inner.get("merchantOrderId") or inner.get("merchantTransactionId")
+        if not merchant_order_id and payload.get("response"):
+            data = json.loads(base64.b64decode(payload["response"]).decode())
+            merchant_order_id = (data.get("data") or {}).get("merchantTransactionId")
+    except Exception as e:
+        print(f"PhonePe callback parse error: {e}")
+
+    if not merchant_order_id:
+        return {"status": "ignored"}
+
+    try:
+        result = _confirm_phonepe(session, merchant_order_id, background_tasks)
+        return {"status": "ok", "result": result}
+    except HTTPException as e:
+        return {"status": "error", "message": e.detail}
     except Exception as e:
         print(f"PhonePe Callback Error: {traceback.format_exc()}")
         return {"status": "error", "message": str(e)}
@@ -1052,330 +999,39 @@ def phonepe_callback(payload: Dict[str, Any], background_tasks: BackgroundTasks,
 
 @router.get("/api/phonepe/status/{transaction_id}")
 def check_phonepe_status(transaction_id: str, session: Session = Depends(get_session)):
-    """
-    Check PhonePe payment status using v2 OAuth API
-    Called by frontend to verify payment after redirect
-    """
+    """Check PhonePe payment status (used by the payment-callback page)."""
+    gateway = _get_gateway(session, "phonepe")
+    if not gateway:
+        raise HTTPException(status_code=400, detail="PhonePe gateway not configured")
     try:
-        import requests
-        
-        # Get active PhonePe gateway
-        gateway = session.exec(select(PaymentGateway).where(PaymentGateway.provider == "phonepe")).first()
-        if not gateway:
-            raise HTTPException(status_code=400, detail="PhonePe gateway not configured")
-        
-        creds = json.loads(gateway.credentials_json)
-        
-        # Get v2 OAuth credentials
-        client_id = creds.get("client_id") or creds.get("merchant_id")
-        client_secret = creds.get("client_secret") or creds.get("salt_key")
-        client_version = creds.get("client_version", "1")
-        environment = creds.get("environment", "SANDBOX").upper()
-        
-        if not client_id or not client_secret:
-            raise HTTPException(status_code=500, detail="PhonePe credentials not configured properly")
-        
-        # API URLs based on environment
-        if environment == "PRODUCTION":
-            auth_url = "https://api.phonepe.com/apis/identity-manager/v1/oauth/token"
-            status_url = f"https://api.phonepe.com/apis/pg/checkout/v2/order/{transaction_id}/status"
-        else:
-            auth_url = "https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token"
-            status_url = f"https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/order/{transaction_id}/status"
-        
-        print(f"DEBUG PhonePe Status: Checking order {transaction_id}")
-        print(f"DEBUG PhonePe Status: Environment={environment}, URL={status_url}")
-        
-        # Step 1: Get OAuth Access Token
-        auth_response = requests.post(
-            auth_url,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data={
-                "client_id": client_id,
-                "client_version": client_version,
-                "client_secret": client_secret,
-                "grant_type": "client_credentials"
-            },
-            timeout=30
-        )
-        
-        auth_data = auth_response.json()
-        print(f"DEBUG PhonePe Status Auth: {auth_data}")
-        
-        if not auth_data.get("access_token"):
-            error_msg = auth_data.get("message") or auth_data.get("error_description") or "Auth failed"
-            return {
-                "success": False,
-                "status": "AUTH_FAILED",
-                "message": f"PhonePe Auth: {error_msg}"
-            }
-        
-        access_token = auth_data["access_token"]
-        
-        # Step 2: Check Order Status
-        status_response = requests.get(
-            status_url,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"O-Bearer {access_token}"
-            },
-            timeout=30
-        )
-        
-        response_data = status_response.json()
-        print(f"DEBUG PhonePe Status Response: {response_data}")
-        
-        # Parse v2 response format
-        state = response_data.get("state", "").upper()
-        
-        if state == "COMPLETED":
-            return {
-                "success": True,
-                "status": "SUCCESS",
-                "transactionId": transaction_id,
-                "amount": response_data.get("amount"),
-                "paymentDetails": response_data.get("paymentDetails", {})
-            }
-        elif state in ["PENDING", "INITIATED"]:
-            return {
-                "success": False,
-                "status": "PENDING",
-                "message": "Payment is being processed"
-            }
-        elif state == "FAILED":
-            return {
-                "success": False,
-                "status": "FAILED",
-                "message": response_data.get("errorMessage") or "Payment failed"
-            }
-        else:
-            return {
-                "success": False,
-                "status": response_data.get("state", "UNKNOWN"),
-                "message": response_data.get("errorMessage") or "Payment status unknown"
-            }
-            
+        response_data = _phonepe_status(json.loads(gateway.credentials_json or "{}"), transaction_id)
+    except HTTPException as e:
+        return {"success": False, "status": "AUTH_FAILED", "message": str(e.detail)}
     except Exception as e:
         print(f"PhonePe Status Check Error: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
+    state = (response_data.get("state") or "").upper()
+    if state == "COMPLETED":
+        return {"success": True, "status": "SUCCESS", "transactionId": transaction_id, "amount": response_data.get("amount")}
+    if state in ["PENDING", "INITIATED"]:
+        return {"success": False, "status": "PENDING", "message": "Payment is being processed"}
+    if state == "FAILED":
+        return {"success": False, "status": "FAILED", "message": response_data.get("errorMessage") or "Payment failed"}
+    return {"success": False, "status": response_data.get("state", "UNKNOWN"), "message": response_data.get("errorMessage") or "Payment status unknown"}
+
 
 @router.post("/api/phonepe/confirm-order")
-def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundTasks, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
     """
-    Confirm PhonePe payment and create order in database
-    Called by frontend after successful payment redirect
+    Called by the frontend after the PhonePe redirect. Any order_data sent by
+    the browser is ignored - the order is built from the server-side checkout.
     """
+    transaction_id = payload.get("transaction_id") or payload.get("orderId")
+    if not transaction_id:
+        raise HTTPException(status_code=400, detail="Transaction ID required")
     try:
-        import requests
-        
-        transaction_id = payload.get("transaction_id") or payload.get("orderId")
-        order_data = payload.get("order_data", {})
-        
-        if not transaction_id:
-            raise HTTPException(status_code=400, detail="Transaction ID required")
-        
-        if not order_data:
-            raise HTTPException(status_code=400, detail="Order data required")
-        
-        # Check if order already exists to prevent duplicates
-        existing_order = session.exec(select(Order).where(Order.order_id == transaction_id)).first()
-        if existing_order:
-            print(f"DEBUG PhonePe: Order {transaction_id} already exists")
-            return {"ok": True, "orderId": existing_order.order_id, "message": "Order already exists"}
-        
-        # Get active PhonePe gateway
-        gateway = session.exec(select(PaymentGateway).where(PaymentGateway.provider == "phonepe")).first()
-        if not gateway:
-            raise HTTPException(status_code=400, detail="PhonePe gateway not configured")
-        
-        creds = json.loads(gateway.credentials_json)
-        client_id = creds.get("client_id") or creds.get("merchant_id")
-        client_secret = creds.get("client_secret") or creds.get("salt_key")
-        client_version = creds.get("client_version", "1")
-        environment = creds.get("environment", "SANDBOX").upper()
-        
-        # API URLs based on environment
-        if environment == "PRODUCTION":
-            auth_url = "https://api.phonepe.com/apis/identity-manager/v1/oauth/token"
-            status_url = f"https://api.phonepe.com/apis/pg/checkout/v2/order/{transaction_id}/status"
-        else:
-            auth_url = "https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token"
-            status_url = f"https://api-preprod.phonepe.com/apis/pg-sandbox/checkout/v2/order/{transaction_id}/status"
-        
-        # Get OAuth Token
-        auth_response = requests.post(
-            auth_url,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data={
-                "client_id": client_id,
-                "client_version": client_version,
-                "client_secret": client_secret,
-                "grant_type": "client_credentials"
-            },
-            timeout=30
-        )
-        
-        auth_data = auth_response.json()
-        if not auth_data.get("access_token"):
-            raise HTTPException(status_code=400, detail="PhonePe authentication failed")
-        
-        access_token = auth_data["access_token"]
-        
-        # Check Payment Status
-        status_response = requests.get(
-            status_url,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"O-Bearer {access_token}"
-            },
-            timeout=30
-        )
-        
-        response_data = status_response.json()
-        print(f"DEBUG PhonePe Confirm: Status Response = {response_data}")
-        
-        state = response_data.get("state", "").upper()
-        
-        if state != "COMPLETED":
-            return {
-                "ok": False,
-                "status": state,
-                "message": response_data.get("errorMessage") or "Payment not completed"
-            }
-        
-        # Payment is VERIFIED - Now create order
-        print(f"DEBUG PhonePe: Payment verified, creating order {transaction_id}")
-        
-        # Extract user_id from token if available
-        user_id = None
-        try:
-            if token:
-                from supabase_utils import init_supabase
-                s_client = init_supabase()
-                if s_client:
-                    user_data_sb = s_client.auth.get_user(token)
-                    if user_data_sb and user_data_sb.user:
-                        user_id = user_data_sb.user.id
-                        print(f"DEBUG PhonePe: Linked to User UUID: {user_id}")
-        except Exception as e:
-            print(f"DEBUG PhonePe: Token check failed: {e}")
-        
-        # Guest handling
-        if not user_id:
-            existing_cust = session.exec(select(Customer).where(Customer.email == order_data.get('email'))).first()
-            if not existing_cust:
-                new_guest = Customer(
-                    full_name=order_data.get('name'),
-                    email=order_data.get('email'),
-                    provider="guest",
-                    is_active=True
-                )
-                session.add(new_guest)
-                session.commit()
-        
-        # Prepare items
-        items = order_data.get('items', [])
-        if not items and order_data.get('productId'):
-            # Try to fetch product name from DB
-            from models import Product
-            product_id = order_data.get('productId')
-            db_product = session.get(Product, product_id)
-            product_name = db_product.name if db_product else "Jewellery Item"
-            _db_price = db_product.price if db_product and db_product.price is not None else 0
-            items = [{
-                "productId": product_id,
-                "productName": product_name,
-                "variantId": order_data.get('variantId'),
-                "quantity": order_data.get('quantity'),
-                "price": _db_price
-            }]
-        
-        # 🔒 SERVER-SIDE PRICE RECALCULATION
-        pp_verified_amount = recalculate_amount_server_side(items, session) if items else order_data.get('amount', 0)
-
-        # 🔒 SYNC: Update item prices in items list to match DB-verified prices
-        from models import Product as ProductSyncPP
-        for item in items:
-            pid = item.get("productId")
-            if not pid:
-                continue
-            prod = session.get(ProductSyncPP, pid)
-            if prod:
-                item["price"] = prod.price if prod.price is not None else 0
-
-        # 🔒 SERVER-SIDE COUPON VALIDATION
-        pp_coupon_code = order_data.get('couponCode', '') or ''
-        pp_coupon_discount = validate_coupon_server_side(pp_coupon_code, pp_verified_amount, session)
-        pp_verified_after_coupon = max(0, pp_verified_amount - pp_coupon_discount)
-
-        # Calculate Tax
-        state_input = order_data.get('state', '')
-
-        # Calculate Prepaid Discount (if enabled) on post-coupon amount
-        prepaid_discount = calculate_prepaid_discount(pp_verified_after_coupon, 'online', session)
-        final_amount = pp_verified_after_coupon - prepaid_discount
-
-        total_discount = pp_coupon_discount + prepaid_discount
-        tax_data = calculate_tax_breakdown(final_amount, state_input)
-        
-        # PhonePe Fix: validate coupon usage limit before creating order
-        validate_coupon_usage_limit(pp_coupon_code, order_data.get('email', ''), session)
-        
-        # Create Order
-        new_order = Order(
-            order_id=transaction_id,
-            customer_name=order_data.get('name'),
-            email=order_data.get('email'),
-            phone=order_data.get('contact'),
-            address=order_data.get('address'),
-            city=order_data.get('city'),
-            pincode=order_data.get('pincode'),
-            total_amount=final_amount,
-            original_amount=pp_verified_amount,   # pre-coupon server-verified amount
-            discount_amount=total_discount,        # coupon + prepaid discount
-            payment_method="online",
-            status="paid",
-            email_status="pending",
-            user_id=uuid.UUID(user_id) if user_id else None,
-            items_json=json.dumps(items),
-            state=state_input,
-            hsn_code=tax_data["hsn_code"],
-            taxable_value=tax_data["taxable_value"],
-            cgst_amount=tax_data["cgst_amount"],
-            sgst_amount=tax_data["sgst_amount"],
-            igst_amount=tax_data["igst_amount"],
-            status_history=json.dumps([{
-                "status": "paid",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "comment": f"Payment via PhonePe. TxnID: {transaction_id}"
-                    + (f" | Coupon: {pp_coupon_code} (-₹{pp_coupon_discount})" if pp_coupon_discount > 0 else "")
-                    + (f" | Prepaid Discount: ₹{prepaid_discount}" if prepaid_discount > 0 else "")
-            }])
-        )
-        
-        session.add(new_order)
-        session.commit()
-        session.refresh(new_order)
-
-        # Fix #4 — Deduct stock + Inventory
-        deduct_stock_for_items(items, new_order.order_id, session)
-        
-        # PhonePe Fix: increment coupon usage
-        if pp_coupon_code and pp_coupon_discount > 0:
-            increment_coupon_usage(pp_coupon_code, order_data.get('email', ''), new_order.order_id, session)
-        
-        # Send notifications
-        background_tasks.add_task(send_order_notifications, new_order.order_id)
-        
-        print(f"DEBUG PhonePe: Order {new_order.order_id} created successfully")
-        
-        return {
-            "ok": True,
-            "orderId": new_order.order_id,
-            "amount": new_order.total_amount
-        }
-        
+        return _confirm_phonepe(session, transaction_id, background_tasks)
     except HTTPException:
         raise
     except Exception as e:
@@ -1383,244 +1039,111 @@ def confirm_phonepe_order(payload: Dict[str, Any], background_tasks: BackgroundT
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _razorpay_client(session: Session):
+    gateway = _get_gateway(session, "razorpay")
+    if not gateway:
+        raise HTTPException(status_code=500, detail="Razorpay gateway not configured")
+    creds = json.loads(gateway.credentials_json or "{}")
+    return razorpay.Client(auth=(creds.get("key_id"), creds.get("key_secret"))), creds
+
+
 @router.post("/api/update-order-status")
-def update_order_status_callback(payload: Dict[str, Any], background_tasks: BackgroundTasks, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+def update_order_status_callback(payload: Dict[str, Any], background_tasks: BackgroundTasks, session: Session = Depends(get_session)):
+    """
+    Razorpay success handler (called by the browser).
+    1. Verify the signature
+    2. Verify with Razorpay that THIS payment for THIS order was captured for the EXACT amount
+    3. Create the order from the server-side checkout snapshot (browser order_data is ignored)
+    """
+    from models import PendingCheckout
+    razorpay_payment_id = payload.get("razorpay_payment_id")
+    razorpay_order_id = payload.get("razorpay_order_id")
+    razorpay_signature = payload.get("razorpay_signature")
+    if not razorpay_payment_id or not razorpay_order_id or not razorpay_signature:
+        raise HTTPException(status_code=400, detail="Missing payment data")
+
+    client, _ = _razorpay_client(session)
     try:
-        # Verify Razorpay Signature for Security
-        # 1. Get Payment Data
-        razorpay_payment_id = payload.get("razorpay_payment_id")
-        razorpay_order_id = payload.get("razorpay_order_id")
-        razorpay_signature = payload.get("razorpay_signature")
-        order_data = payload.get("order_data")
-        
-        if not order_data or not razorpay_payment_id or not razorpay_order_id or not razorpay_signature:
-             raise HTTPException(status_code=400, detail="Missing payment data")
+        client.utility.verify_payment_signature({
+            'razorpay_order_id': razorpay_order_id,
+            'razorpay_payment_id': razorpay_payment_id,
+            'razorpay_signature': razorpay_signature
+        })
+    except Exception as e:
+        print(f"Signature Verification Failed: {e}")
+        raise HTTPException(status_code=400, detail="Invalid Payment Signature")
 
-        # 2. Get Active Gateway Secret
-        gateway = session.exec(select(PaymentGateway).where(PaymentGateway.is_active == True)).first()
-        if not gateway or gateway.provider != "razorpay":
-            raise HTTPException(status_code=500, detail="Active gateway configuration error")
-        
-        creds = json.loads(gateway.credentials_json)
-        key_secret = creds.get("key_secret")
+    pending = session.get(PendingCheckout, razorpay_order_id)
+    if not pending:
+        existing = session.exec(select(Order).where(Order.order_id == f"ORD-{razorpay_order_id.replace('order_', '')}")).first()
+        if existing:
+            return _order_response(existing)
+        raise HTTPException(status_code=404, detail="Checkout session not found. Your payment is safe - please contact support with payment ID " + razorpay_payment_id)
 
-        # 3. Verify Signature
+    try:
+        payment = client.payment.fetch(razorpay_payment_id)
+    except Exception as e:
+        print(f"Razorpay payment fetch failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not verify payment with Razorpay. Please contact support.")
+
+    if payment.get("order_id") != razorpay_order_id or int(payment.get("amount") or 0) != int(pending.amount_paise):
+        print(f"🚨 Razorpay AMOUNT/ORDER MISMATCH: payment={payment.get('order_id')}/{payment.get('amount')} expected={razorpay_order_id}/{pending.amount_paise}")
+        raise HTTPException(status_code=400, detail="Payment amount mismatch. Please contact support.")
+
+    if payment.get("status") == "authorized":
         try:
-            client = razorpay.Client(auth=(creds.get("key_id"), key_secret))
-            
-            params_dict = {
-                'razorpay_order_id': razorpay_order_id,
-                'razorpay_payment_id': razorpay_payment_id,
-                'razorpay_signature': razorpay_signature
-            }
-            
-            # This will raise SignatureVerificationError if fails
-            client.utility.verify_payment_signature(params_dict)
-            
+            client.payment.capture(razorpay_payment_id, pending.amount_paise, {"currency": "INR"})
+            payment["status"] = "captured"
         except Exception as e:
-            print(f"Signature Verification Failed: {e}")
-            raise HTTPException(status_code=400, detail="Invalid Payment Signature")
-             
-        # Razorpay Fix: Check for duplicate order to ensure idempotency
-        computed_order_id = f"ORD-{razorpay_order_id.replace('order_', '')}" if razorpay_order_id else f"ORD-{int(time.time())}"
-        existing_order = session.exec(select(Order).where(Order.order_id == computed_order_id)).first()
-        if existing_order:
-            print(f"DEBUG Razorpay: Order {computed_order_id} already exists, skipping duplicate creation")
-            return {"ok": True, "orderId": existing_order.order_id, "message": "Order already exists"}
+            print(f"Razorpay capture failed (may already be captured): {e}")
+    if payment.get("status") not in ("captured", "authorized"):
+        raise HTTPException(status_code=400, detail=f"Payment not completed (status: {payment.get('status')})")
 
-        # Create the actual order in DB now that payment is VERIFIED
-        # Or update if we created it as 'awaiting_payment' earlier.
-        # Logic: Create new order as 'paid'
-        
-        # Extract User ID if passed (frontend might need to pass it, or we rely on creating guest)
-        # Ideally frontend calls this with Auth token, but Razorpay callback might be public.
-        # For now, let's assume we create it based on payload data.
-        
-        items = order_data.get('items', [])
-        if not items and order_data.get('productId'):
-            from models import Product
-            _pid = order_data.get('productId')
-            _db_prod = session.get(Product, _pid) if _pid else None
-            _pname = _db_prod.name if _db_prod else "Jewellery Item"
-            _db_price = _db_prod.price if _db_prod and _db_prod.price is not None else 0
-            items = [{
-                "productId": _pid,
-                "productName": _pname,
-                "variantId": order_data.get('variantId'),
-                "quantity": order_data.get('quantity'),
-                "price": _db_price
-            }]
-
-        # --- LOGIC UPDATE: Prioritize Logged-in User ---
-        user_id = None
-        
-        # 1a. Try Local JWT first (Firebase / email-password users) — instant, no network call
-        if token:
-            try:
-                from auth_utils import ALGORITHM, SECRET_KEY
-                from jose import jwt as jose_jwt
-                payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-                if payload.get("role") == "customer":
-                    local_cust = session.exec(
-                        select(Customer).where(Customer.email == payload.get("sub"))
-                    ).first()
-                    if local_cust and local_cust.supabase_uid:
-                        user_id = local_cust.supabase_uid
-                        print(f"DEBUG: Order linked via Local JWT: {user_id}")
-            except Exception:
-                pass  # Not a local JWT, try Supabase next
-
-        # 1b. Try Supabase token (Google / social login users)
-        if not user_id and token:
-            try:
-                from supabase_utils import init_supabase
-                s_client = init_supabase()
-                if s_client:
-                    user_data_sb = s_client.auth.get_user(token)
-                    if user_data_sb and user_data_sb.user:
-                        user_id = user_data_sb.user.id
-                        print(f"DEBUG: Order linked to Supabase User UUID: {user_id}")
-            except Exception as e:
-                print(f"DEBUG: Token check failed in callback: {e}")
-
-        # 2. Fallback: Try to get user_id from Razorpay Notes (only if token didn't work)
-        if not user_id:
-            try:
-                rzp_order_details = client.order.fetch(razorpay_order_id)
-                if rzp_order_details and 'notes' in rzp_order_details:
-                     notes_uid = rzp_order_details['notes'].get('user_id')
-                     if notes_uid:
-                         user_id = notes_uid
-                         print(f"DEBUG: Found user_id in Razorpay Notes: {user_id}")
-            except Exception as e:
-                print(f"DEBUG: Razorpay notes fetch skipped/failed: {e}")
-
-        # 3. Guest Handling: Create Guest Customer if no user_id found (same as COD flow)
-        if not user_id:
-            existing_cust = session.exec(select(Customer).where(Customer.email == order_data.get('email'))).first()
-            if not existing_cust:
-                # Create Guest Customer - DO NOT link order to any user_id
-                new_guest = Customer(
-                    full_name=order_data.get('name'),
-                    email=order_data.get('email'),
-                    provider="guest",
-                    is_active=True
-                )
-                session.add(new_guest)
-                session.commit()
-                # print(f"DEBUG: Created Guest Customer for email: [MASKED]")
-            # NOTE: Do NOT set user_id from email match - this is a guest order
-            # Order will have user_id=None which is correct for guest checkout
-            print(f"DEBUG: Guest Order - user_id will be None")
-        
-        # Calculate Tax
-        state_input = order_data.get('state', '')
-        # If state not in order_data, try to extract from address? No, assume frontend sends it.
-        # Fallback to empty string which defaults to IGST
-
-        # 🔒 SERVER-SIDE PRICE RECALCULATION — never trust frontend amounts
-        rzp_items = items if items else []
-        rzp_verified_amount = recalculate_amount_server_side(rzp_items, session) if rzp_items else order_data.get('amount', 0)
-
-        # 🔒 SYNC: Update item prices in items list to match DB-verified prices
-        from models import Product as ProductSyncRzp
-        for item in items:
-            pid = item.get("productId")
-            if not pid:
-                continue
-            prod = session.get(ProductSyncRzp, pid)
-            if prod:
-                item["price"] = prod.price if prod.price is not None else 0
-
-        # 🔒 SERVER-SIDE COUPON VALIDATION
-        rzp_coupon_code = order_data.get('couponCode', '') or ''
-        rzp_coupon_discount = validate_coupon_server_side(rzp_coupon_code, rzp_verified_amount, session)
-        rzp_verified_amount_after_coupon = max(0, rzp_verified_amount - rzp_coupon_discount)
-
-        # 🚫 REGION BLOCK CHECK — block even in callback flow to prevent bypass paths
-        validate_delivery_state_not_blocked(state_input, session)
-
-        # Calculate Prepaid Discount (if enabled) on post-coupon amount
-        prepaid_discount = calculate_prepaid_discount(rzp_verified_amount_after_coupon, 'online', session)
-        final_amount = rzp_verified_amount_after_coupon - prepaid_discount
-
-        total_discount = rzp_coupon_discount + prepaid_discount
-
-        tax_data = calculate_tax_breakdown(final_amount, state_input)
-
-        # Fix #3 — Coupon usage limit check (global + per user) BEFORE creating order
-        validate_coupon_usage_limit(rzp_coupon_code, order_data.get('email', ''), session)
-
-        new_order = Order(
-            order_id=computed_order_id,
-            customer_name=order_data.get('name'),
-            email=order_data.get('email'),
-            phone=order_data.get('contact'),
-            address=order_data.get('address'),
-            city=order_data.get('city'),
-            pincode=order_data.get('pincode'),
-            total_amount=final_amount,
-            original_amount=rzp_verified_amount,   # pre-coupon server-verified amount
-            discount_amount=total_discount,          # coupon + prepaid discount
-            payment_method="online",
-            status="paid",
-            email_status="pending",
-            user_id=uuid.UUID(user_id) if user_id else None,
-            items_json=json.dumps(items),
-            # Fix #1 — Store Razorpay IDs for webhook idempotency
-            razorpay_order_id=razorpay_order_id,
-            razorpay_payment_id=razorpay_payment_id,
-            # Tax Fields
-            state=state_input,
-            hsn_code=tax_data["hsn_code"],
-            taxable_value=tax_data["taxable_value"],
-            cgst_amount=tax_data["cgst_amount"],
-            sgst_amount=tax_data["sgst_amount"],
-            igst_amount=tax_data["igst_amount"],
-            status_history=json.dumps([{
-                "status": "paid",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "comment": f"Payment Successful. Ref: {razorpay_payment_id}"
-                    + (f" | Coupon: {rzp_coupon_code} (-\u20b9{rzp_coupon_discount})" if rzp_coupon_discount > 0 else "")
-                    + (f" | Prepaid Discount: \u20b9{prepaid_discount}" if prepaid_discount > 0 else "")
-            }])
-        )
-
-        session.add(new_order)
-        session.commit()
-        session.refresh(new_order)
-
-        # Fix #4 — Deduct stock + Inventory
-        deduct_stock_for_items(items, new_order.order_id, session)
-
-        # Fix #3 — Increment coupon usage
-        if rzp_coupon_code and rzp_coupon_discount > 0:
-            increment_coupon_usage(rzp_coupon_code, order_data.get('email', ''), new_order.order_id, session)
-
-        # Fix #5 — Log PaymentTransaction
-        try:
-            from models import PaymentTransaction
-            txn = PaymentTransaction(
-                order_id=new_order.order_id,
-                razorpay_order_id=razorpay_order_id,
-                razorpay_payment_id=razorpay_payment_id,
-                status="captured",
-                amount=final_amount,
-                source="client",
-                raw_response=json.dumps(payload) if isinstance(payload, dict) else str(payload)[:2000],
-            )
-            session.add(txn)
-            session.commit()
-        except Exception as txn_err:
-            print(f"⚠️ PaymentTransaction log failed (non-blocking): {txn_err}")
-
-        background_tasks.add_task(send_order_notifications, new_order.order_id)
-
-        return {"ok": True, "orderId": new_order.order_id}
-
+    try:
+        order = _finalize_pending(session, pending, razorpay_payment_id, background_tasks)
     except Exception as e:
         print(f"CRITICAL API ERROR: {traceback.format_exc()}")
-        raise HTTPException(status_code=400, detail=f"Order creation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Order creation error: {str(e)}")
+    return _order_response(order)
+
+
+@router.post("/api/webhook/razorpay")
+async def razorpay_webhook(request: Request, session: Session = Depends(get_session)):
+    """
+    Razorpay webhook (payment.captured / order.paid). Creates the order even if
+    the customer closed the browser after paying.
+    Setup: Razorpay Dashboard → Webhooks → URL: https://<backend>/api/webhook/razorpay
+    Secret: put the same value in .env as RAZORPAY_WEBHOOK_SECRET
+            (or as "webhook_secret" in the gateway credentials).
+    """
+    import hmac as _hmac
+    import hashlib
+    from models import PendingCheckout
+    body = await request.body()
+    _, creds = _razorpay_client(session)
+    secret = os.getenv("RAZORPAY_WEBHOOK_SECRET") or creds.get("webhook_secret")
+    if not secret:
+        raise HTTPException(status_code=503, detail="Webhook secret not configured")
+    signature = request.headers.get("x-razorpay-signature", "")
+    expected = _hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    if not _hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    event = json.loads(body or b"{}")
+    if event.get("event") not in ("payment.captured", "order.paid"):
+        return {"status": "ignored"}
+    payment = ((event.get("payload") or {}).get("payment") or {}).get("entity") or {}
+    rzp_order_id = payment.get("order_id")
+    if not rzp_order_id:
+        return {"status": "ignored"}
+    pending = session.get(PendingCheckout, rzp_order_id)
+    if not pending:
+        return {"status": "unknown_order"}
+    if int(payment.get("amount") or 0) != int(pending.amount_paise):
+        print(f"🚨 Razorpay webhook AMOUNT MISMATCH {rzp_order_id}")
+        return {"status": "amount_mismatch"}
+    order = _finalize_pending(session, pending, payment.get("id") or "webhook", None)
+    return {"status": "ok", "orderId": order.order_id}
 
 
 @router.post("/api/orders", response_model=Order)
@@ -1631,7 +1154,7 @@ def create_order(order: Order, background_tasks: BackgroundTasks, current_user: 
         session.refresh(order)
         
         # Send notifications in background
-        background_tasks.add_task(send_order_notifications, order.order_id)
+        background_tasks.add_task(send_order_notifications, order.dict())
         
         return order
     except Exception as e:
@@ -1643,106 +1166,199 @@ def read_orders(current_user: AdminUser = Depends(get_current_admin), session: S
     return orders
 
 @router.get("/api/customer/orders", response_model=List[Order])
-def read_my_orders(token: str = Depends(oauth2_scheme), session: Session = Depends(get_session)):
-    user_id = None
-    
-    # Get user_id from Supabase Token (ONLY way to identify user)
-    try:
-        from supabase_utils import init_supabase
-        s_client = init_supabase()
-        if s_client:
-            user_data = s_client.auth.get_user(token)
-            if user_data and user_data.user:
-                user_id = user_data.user.id  # UUID string
-                print(f"DEBUG: Supabase User UUID: {user_id}")
-    except Exception as e:
-        print(f"DEBUG: Supabase token check failed: {e}")
-            
-    if not user_id:
+def read_my_orders(token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+    """
+    Orders of the logged-in customer. Works for every login type
+    (Google OAuth, phone OTP, email/password, old Supabase sessions).
+    Matched by Supabase UUID, verified email, or verified phone number.
+    """
+    from order_access import resolve_identity, orders_for_identity
+    ident = resolve_identity(token, session)
+    if not ident.get("customer") and not ident.get("supabase_uid"):
         raise HTTPException(status_code=401, detail="Invalid or expired token. Please login again.")
+    return orders_for_identity(ident, session)
 
-    # Fetch Orders ONLY by user_id (UUID) - Strict user isolation
-    orders = []
-    
-    print(f"DEBUG: Fetching orders ONLY for User UUID: {user_id}")
-    try:
-        orders = session.exec(
-            select(Order)
-            .where(Order.user_id == uuid.UUID(user_id))
-            .order_by(Order.created_at.desc())
-        ).all()
-        print(f"DEBUG: Found {len(orders)} orders for this user")
-    except Exception as e:
-        print(f"DEBUG: UUID query error: {e}")
-        orders = []
-
-    return orders
 
 @router.get("/api/orders/{order_id}", response_model=Order)
-def read_order(order_id: str, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
-    order = get_order_by_id_flexible(session, order_id)
-    
+def read_order(order_id: str, key: Optional[str] = None, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+    """
+    🔒 Order details are visible ONLY to:
+      - admins
+      - the logged-in owner (UUID / email / verified phone)
+      - anyone holding the signed access key (sent in confirmation emails and
+        returned right after checkout, so guests can see their own order)
+    """
+    from order_access import resolve_identity, identity_owns_order, verify_order_access_key
+    ident = resolve_identity(token, session)
+
+    if ident.get("is_admin"):
+        order = get_order_by_id_flexible(session, order_id)
+    else:
+        # Non-admins: exact order_id only (no numeric-ID enumeration)
+        order = session.exec(select(Order).where(Order.order_id == order_id)).first()
+        if not order and not order_id.startswith("ORD-"):
+            order = session.exec(select(Order).where(Order.order_id == f"ORD-{order_id}")).first()
+
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
-    
-    # 🔒 AUTH CHECK: Verify the requesting user owns this order or is admin
-    is_admin = False
-    customer_email = None   # From local JWT (Firebase / email users)
-    supabase_user_id = None # From Supabase JWT
 
-    if token:
-        # 1. Try local JWT (Firebase / email-password users)
-        try:
-            from jose import jwt as jose_jwt
-            from auth_utils import SECRET_KEY, ALGORITHM
-            payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            role = payload.get("role")
-            if role == "admin":
-                is_admin = True
-            elif role == "customer":
-                customer_email = payload.get("sub")  # email stored in 'sub'
-        except Exception:
-            pass
+    if ident.get("is_admin") or verify_order_access_key(order.order_id, key) or identity_owns_order(ident, order):
+        return order
 
-        # 2. Try Supabase JWT (Google / social login users)
-        if not is_admin and not customer_email:
-            try:
-                from supabase_utils import init_supabase
-                s_client = init_supabase()
-                if s_client:
-                    user_data = s_client.auth.get_user(token)
-                    if user_data and user_data.user:
-                        supabase_user_id = user_data.user.id
-                        customer_email = user_data.user.email
-            except Exception:
-                pass
-
-    # Allow: admin, or order owner (by supabase UUID, email, or guest — no token)
-    if not is_admin:
-        if not token:
-            # Guest access: allow by order ID only (no token, no restriction)
-            # This allows order confirmation page to work for guests
-            pass
-        else:
-            # Logged-in user: must match by email or supabase UUID
-            if not customer_email and not supabase_user_id:
-                raise HTTPException(status_code=401, detail="Authentication required")
-
-            # Check Supabase UUID ownership
-            if order.user_id and supabase_user_id and str(order.user_id) != str(supabase_user_id):
-                raise HTTPException(status_code=403, detail="Not authorized to view this order")
-
-            # Check email ownership (covers local JWT users and email-based orders)
-            if customer_email and order.email and order.email != customer_email:
-                # Only reject if order also has a user_id (strong ownership signal)
-                # Otherwise allow — guest order retrieved by logged-in user with same email
-                if order.user_id:
-                    raise HTTPException(status_code=403, detail="Not authorized to view this order")
-    
-    return order
+    # Same response for "exists but not yours" (no information leak)
+    raise HTTPException(status_code=404, detail="Order not found")
 
 
 # --- RapidShyp Integration Routes ---
+
+def _flag_order_shipping_pending(order, error_msg: str, session, background_tasks=None):
+    """
+    Fix #8: When RapidShyp API fails, mark order as shipping_pending_manual
+    and send Telegram alert to admin instead of returning a 500 error.
+    """
+    import json
+    from datetime import datetime, timezone
+
+    try:
+        order.status = "shipping_pending_manual"
+        try:
+            hist = json.loads(order.status_history or "[]")
+        except Exception:
+            hist = []
+        hist.append({
+            "status": "shipping_pending_manual",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "comment": f"RapidShyp API failed: {error_msg[:300]}",
+        })
+        order.status_history = json.dumps(hist)
+        session.add(order)
+        session.commit()
+        print(f"[RAPIDSHYP-FALLBACK] Order {order.order_id} flagged as shipping_pending_manual")
+    except Exception as save_err:
+        print(f"[RAPIDSHYP-FALLBACK] ⚠️ Could not save status: {save_err}")
+
+    # Send Telegram alert to admin
+    try:
+        from notifications import send_telegram_alert
+        msg = (
+            f"🚨 SHIPPING ALERT 🚨\n"
+            f"Order: {order.order_id}\n"
+            f"Customer: {order.customer_name}\n"
+            f"Amount: ₹{order.total_amount}\n"
+            f"Error: {error_msg[:500]}\n"
+            f"Action: Please ship manually or retry from Admin Panel → Orders."
+        )
+        send_telegram_alert(msg)
+    except Exception as tg_err:
+        print(f"[RAPIDSHYP-FALLBACK] ⚠️ Telegram alert failed: {tg_err}")
+
+@router.get("/api/orders/{order_id}/track")
+def track_order_endpoint(order_id: str, session: Session = Depends(get_session)):
+    order = get_order_by_id_flexible(session, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    if not order.awb_number:
+         return {"status": "Not Shipped", "details": "Order has not been shipped yet."}
+         
+    tracking_info = rapidshyp_client.track_order(awb=order.awb_number)
+    return tracking_info
+
+@router.post("/api/orders/{order_id}/return")
+def return_order_endpoint(order_id: str, return_req: ReturnRequest, session: Session = Depends(get_session)):
+    # Logic to process return
+    pass
+
+@router.post("/api/serviceability")
+def check_serviceability(req: ServiceabilityCheck, session: Session = Depends(get_session)):
+    # Check Toggle
+    store_settings = session.get(StoreSettings, 1)
+    rapidshyp_enabled = (store_settings and str(store_settings.rapidshyp_enabled).lower() == "true")
+
+    # Resolve Pincodes
+    pickup_pincode = req.pickup_pincode or os.getenv("PICKUP_PINCODE", "302031")
+    delivery_pincode = req.delivery_pincode or req.pincode
+    
+    if not delivery_pincode:
+         raise HTTPException(status_code=400, detail="Delivery pincode is required")
+
+    if not delivery_pincode:
+         raise HTTPException(status_code=400, detail="Delivery pincode is required")
+
+    # Helper for simple response
+    def format_simple_response(available, date_str=None, cod=True):
+        return {
+            "available": available,
+            "date": date_str,
+            "cod": cod,
+            "message": "Service available" if available else "Service not available"
+        }
+
+    # 1. RAPIDSHYP ENABLED
+    if rapidshyp_enabled:
+        response = rapidshyp_client.check_serviceability(
+            pickup_pincode, 
+            delivery_pincode, 
+            req.weight, 
+            req.value, 
+            req.mode
+        )
+        
+        if response and (response.get("status") == "success" or str(response.get("status")).lower() == "true"):
+            couriers = response.get("serviceable_courier_list", []) or response.get("data", {}).get("serviceable_courier_list", [])
+            
+            if couriers:
+                best_courier = couriers[0]
+                edd_str = best_courier.get("edd") # Format: DD-MM-YYYY or YYYY-MM-DD
+                
+                # Format the date nicely for frontend (e.g., "12 Jan, Fri")
+                formatted_date = edd_str
+                if edd_str:
+                    try:
+                        # Try parsing various formats
+                        for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
+                            try:
+                                d = datetime.strptime(edd_str, fmt)
+                                formatted_date = d.strftime("%d %b, %a")
+                                break
+                            except ValueError:
+                                continue
+                    except:
+                        pass
+                
+                # Check COD
+                cod_available = best_courier.get("cod") if "cod" in best_courier else True
+                
+                return format_simple_response(True, date_str=formatted_date, cod=cod_available)
+                
+            elif str(response.get("status")).lower() == "success" and not couriers:
+                 # Fallback if success but no list? Rare.
+                 d = datetime.now() + timedelta(days=5)
+                 return format_simple_response(True, date_str=d.strftime("%d %b, %a"), cod=True)
+                
+        if "data" in response and "edd" in response["data"]:
+             return format_simple_response(True, date_str=response["data"]["edd"], cod=True)
+
+        return format_simple_response(False)
+
+    # 2. SIMULATION (RapidShyp Disabled)
+    # Check for Flash Delivery from Database
+    from models import FlashPincode
+    flash_pin_obj = session.exec(select(FlashPincode).where(FlashPincode.pincode == str(delivery_pincode))).first()
+    
+    if flash_pin_obj:
+        return {
+            "available": True,
+            "date": "Today (2-4 Hrs)",
+            "cod": True,
+            "message": "⚡ Flash Delivery Available (2-4 Hrs)",
+            "is_flash": True
+        }
+
+    d = datetime.now() + timedelta(days=5)
+    return format_simple_response(True, date_str=d.strftime("%d %b, %a"), cod=True)
+
+
 
 @router.post("/api/admin/orders/{order_id}/ship")
 def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: BackgroundTasks, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):
@@ -1775,7 +1391,7 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: Back
         order.courier_name = "Mock Courier"
         order.status = "Shipped"
         
-        status_update = {"status": "Shipped", "timestamp": datetime.now(timezone.utc).isoformat(), "comment": "Order shipped via Mock Courier"}
+        status_update = {"status": "Shipped", "timestamp": datetime.utcnow().isoformat(), "comment": "Order shipped via Mock Courier"}
         status_history = json.loads(order.status_history) if order.status_history else []
         status_history.append(status_update)
         order.status_history = json.dumps(status_history)
@@ -1785,7 +1401,7 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: Back
         session.refresh(order)
         
         # Trigger shipping notification email
-        background_tasks.add_task(send_shipping_notifications, order.model_dump())
+        background_tasks.add_task(send_shipping_notifications, _order_payload(session, order))
         print(f"DEBUG: Shipping notification triggered for mock shipment {mock_shipment_id}")
             
         return {"ok": True, "shipment": {"shipmentId": mock_shipment_id, "awb": mock_awb, "courierName": "Mock Courier"}}
@@ -1800,7 +1416,7 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: Back
         "address": order.address,
         "city": order.city,
         "pincode": order.pincode,
-        "state": "Maharashtra", # TODO: Store state in Order model or extract from address
+        "state": order.state or "",
         "items": items,
         "payment_method": order.payment_method.upper(), # COD or PREPAID
         "total_amount": order.total_amount,
@@ -1893,8 +1509,10 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: Back
     except HTTPException as he:
         raise he
     except Exception as e:
-        # Fix #8 — RapidShyp API failure: flag order for manual shipping instead of crashing
-        print(f"[RAPIDSHYP] ⚠️ API exception: {traceback.format_exc()}")
+        print("CRITICAL: RapidShyp Wrapper Exception")
+        print(traceback.format_exc())
+        # RapidShyp API failure: flag the order for manual shipping instead of a bare 500
+        print(f"[RAPIDSHYP] API exception: {traceback.format_exc()}")
         _flag_order_shipping_pending(order, str(e), session, background_tasks)
         return {
             "ok": False,
@@ -1921,7 +1539,7 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: Back
             history = json.loads(order.status_history)
             history.append({
                 "status": "Shipped",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.utcnow().isoformat(),
                 "comment": f"Shipped via {order.courier_name}. AWB: {order.awb_number}"
             })
             order.status_history = json.dumps(history)
@@ -1931,12 +1549,11 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: Back
             session.refresh(order)
             
             # Trigger notification
-            background_tasks.add_task(send_shipping_notifications, order.model_dump()) 
+            background_tasks.add_task(send_shipping_notifications, _order_payload(session, order)) 
             
             return {"ok": True, "shipment": sh}
     
     print(f"RapidShyp Error: {response}")
-    # Fix #8 — RapidShyp FAILED status: flag instead of crash
     error_msg = response.get('remarks') or str(response)
     _flag_order_shipping_pending(order, f"RapidShyp FAILED: {error_msg}", session, background_tasks)
     return {
@@ -1944,48 +1561,6 @@ def ship_order(order_id: str, ship_req: ShipOrderRequest, background_tasks: Back
         "warning": f"Shipment creation failed: {error_msg}. Order flagged for manual shipping. Admin notified.",
         "order_id": order.order_id,
     }
-
-
-def _flag_order_shipping_pending(order, error_msg: str, session, background_tasks=None):
-    """
-    Fix #8: When RapidShyp API fails, mark order as shipping_pending_manual
-    and send Telegram alert to admin instead of returning a 500 error.
-    """
-    import json
-    from datetime import datetime, timezone
-
-    try:
-        order.status = "shipping_pending_manual"
-        try:
-            hist = json.loads(order.status_history or "[]")
-        except Exception:
-            hist = []
-        hist.append({
-            "status": "shipping_pending_manual",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "comment": f"RapidShyp API failed: {error_msg[:300]}",
-        })
-        order.status_history = json.dumps(hist)
-        session.add(order)
-        session.commit()
-        print(f"[RAPIDSHYP-FALLBACK] Order {order.order_id} flagged as shipping_pending_manual")
-    except Exception as save_err:
-        print(f"[RAPIDSHYP-FALLBACK] ⚠️ Could not save status: {save_err}")
-
-    # Send Telegram alert to admin
-    try:
-        from notifications import send_telegram_alert
-        msg = (
-            f"🚨 SHIPPING ALERT 🚨\n"
-            f"Order: {order.order_id}\n"
-            f"Customer: {order.customer_name}\n"
-            f"Amount: ₹{order.total_amount}\n"
-            f"Error: {error_msg[:500]}\n"
-            f"Action: Please ship manually or retry from Admin Panel → Orders."
-        )
-        send_telegram_alert(msg)
-    except Exception as tg_err:
-        print(f"[RAPIDSHYP-FALLBACK] ⚠️ Telegram alert failed: {tg_err}")
 
 @router.get("/api/orders/{order_id}/track")
 def track_order_endpoint(order_id: str, session: Session = Depends(get_session)):

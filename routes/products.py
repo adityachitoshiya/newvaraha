@@ -270,6 +270,15 @@ def toggle_spotlight(product_id: str, current_user: AdminUser = Depends(get_curr
 
 @router.post("/api/reviews", response_model=Dict)
 def create_review(review_data: ReviewCreate, session: Session = Depends(get_session)):
+    # Basic validation (rating outside 1-5 would corrupt the product's average)
+    if review_data.rating < 1 or review_data.rating > 5:
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+    if not review_data.comment or len(review_data.comment) > 2000:
+        raise HTTPException(status_code=400, detail="Comment is required (max 2000 characters)")
+    if not session.get(Product, review_data.product_id):
+        raise HTTPException(status_code=404, detail="Product not found")
+    review_data.customer_name = (review_data.customer_name or "Customer")[:80]
+    review_data.media_urls = (review_data.media_urls or [])[:5]
     try:
         new_review = Review(
             product_id=review_data.product_id,
@@ -407,17 +416,6 @@ def bulk_upload_reviews(product_id: str, request: BulkReviewUploadRequest, curre
         print(f"Error processing bulk reviews: {e}")
         traceback.print_exc()
         session.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-        for review in reviews:
-            review_data = review.model_dump() if hasattr(review, 'model_dump') else review.dict()
-            review_data["media_urls"] = json.loads(review.media_urls) if review.media_urls else []
-            result.append(review_data)
-        return result
-    except Exception as e:
-        print(f"Error fetching reviews: {e}")
-        traceback.print_exc()
-        # Return empty list instead of crashing
-        return []
 
 @router.delete("/api/reviews/{review_id}")
 def delete_review(review_id: int, current_user: AdminUser = Depends(get_current_admin), session: Session = Depends(get_session)):

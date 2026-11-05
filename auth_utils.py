@@ -11,10 +11,13 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "300"
 
 if SECRET_KEY == "varaha_secret_key_change_this_in_production":
     import warnings
-    warnings.warn(
-        "⚠️  JWT SECRET_KEY is using the default value! Set JWT_SECRET_KEY env variable in production.",
-        RuntimeWarning
-    )
+    _msg = ("🚨 JWT SECRET_KEY is using the PUBLIC default value - anyone can forge admin tokens! "
+            "Set JWT_SECRET_KEY in .env (e.g. output of: python -c \"import secrets;print(secrets.token_hex(32))\").")
+    print(_msg)
+    warnings.warn(_msg, RuntimeWarning)
+    # In production refuse to start with the default secret
+    if os.getenv("ENV", "").lower() in ("prod", "production"):
+        raise RuntimeError(_msg)
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 

@@ -4,8 +4,7 @@ Handles webhooks, public tracking, and customer tracking endpoints.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlmodel import Session, select
-from typing import Optional, List
-from pydantic import BaseModel
+from typing import Optional
 from datetime import datetime
 import json
 import hashlib
@@ -18,22 +17,25 @@ from rapidshyp_utils import rapidshyp_client
 router = APIRouter()
 
 # Secret for generating tracking tokens
-TRACKING_SECRET = os.getenv("TRACKING_SECRET", "varaha_track_secret_2026")
+def _get_tracking_secret() -> str:
+    # Falls back to the JWT secret so no hard-coded secret lives in the code.
+    # NOTE: if you already sent tracking links using the old default, set
+    # TRACKING_SECRET=varaha_track_secret_2026 in .env to keep them working.
+    from auth_utils import SECRET_KEY
+    return os.getenv("TRACKING_SECRET") or SECRET_KEY
 
-# --- Schema for Track Lookup ---
-class TrackLookupRequest(BaseModel):
-    email: Optional[str] = None
-    phone: Optional[str] = None
+TRACKING_SECRET = None  # resolved lazily via _get_tracking_secret()
 
 def generate_tracking_token(order_id: str) -> str:
     """Generate a secure token for public tracking URL."""
-    data = f"{order_id}_{TRACKING_SECRET}"
+    data = f"{order_id}_{_get_tracking_secret()}"
     return hashlib.sha256(data.encode()).hexdigest()[:16]
 
 def verify_tracking_token(order_id: str, token: str) -> bool:
     """Verify the tracking token."""
+    import hmac as _hmac
     expected = generate_tracking_token(order_id)
-    return token == expected
+    return _hmac.compare_digest(str(token), expected)
 
 # Status mapping: RapidShyp status -> Varaha step
 RAPIDSHYP_STATUS_MAP = {
@@ -58,6 +60,18 @@ async def rapidshyp_webhook(request: Request, session: Session = Depends(get_ses
     Webhook endpoint for RapidShyp status updates.
     RapidShyp sends nested payload with records[].shipment_details[].track_scans[]
     """
+    # 🔒 Webhook authentication: set RAPIDSHYP_WEBHOOK_SECRET in .env and add it to
+    # the webhook URL in RapidShyp (…/api/webhook/rapidshyp?secret=XXXX)
+    # or send it in the "x-webhook-secret" header.
+    import hmac as _hmac
+    expected_secret = os.getenv("RAPIDSHYP_WEBHOOK_SECRET")
+    if expected_secret:
+        provided = request.query_params.get("secret") or request.headers.get("x-webhook-secret") or ""
+        if not _hmac.compare_digest(provided, expected_secret):
+            raise HTTPException(status_code=401, detail="Invalid webhook secret")
+    else:
+        print("[WEBHOOK] ⚠️ RAPIDSHYP_WEBHOOK_SECRET not set - webhook is NOT authenticated!")
+
     try:
         payload = await request.json()
         print(f"[WEBHOOK] Received RapidShyp update")
@@ -140,6 +154,7 @@ async def rapidshyp_webhook(request: Request, session: Session = Depends(get_ses
                     })
                 
                 # Update order
+                status_changed = (order.status or "").lower() != (varaha_status or "").lower()
                 order.status = varaha_status
                 order.tracking_data = json.dumps(tracking_history)
                 if courier_name:
@@ -166,7 +181,7 @@ async def rapidshyp_webhook(request: Request, session: Session = Depends(get_ses
                 # Trigger notifications for key statuses
                 try:
                     from notifications import send_tracking_notification
-                    if varaha_status in ["shipped", "out_for_delivery", "delivered"]:
+                    if status_changed and varaha_status in ["shipped", "out_for_delivery", "delivered"]:
                         send_tracking_notification(order, varaha_status)
                 except Exception as e:
                     print(f"[WEBHOOK] Notification error: {e}")
@@ -213,11 +228,10 @@ def get_order_tracking(order_id: str, session: Session = Depends(get_session)):
     }
 
 @router.get("/api/track/{order_id}/{token}")
-def public_track_order(order_id: str, token: str, refresh: bool = False, session: Session = Depends(get_session)):
+def public_track_order(order_id: str, token: str, session: Session = Depends(get_session)):
     """
     Public tracking endpoint - no login required.
     Token-based authentication for email/SMS links.
-    Can fetch live Rapidshyp data if ?refresh=true.
     """
     if not verify_tracking_token(order_id, token):
         raise HTTPException(status_code=403, detail="Invalid tracking link")
@@ -227,25 +241,6 @@ def public_track_order(order_id: str, token: str, refresh: bool = False, session
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-    # Live Tracking Sync (if requested and applicable)
-    if refresh and order.awb_number and order.status not in ["delivered", "cancelled", "rto_delivered"]:
-        try:
-            result = rapidshyp_client.track_order(awb=order.awb_number)
-            if result.get("status") != "error":
-                scans = result.get("scans") or result.get("tracking_data") or []
-                current_status = result.get("current_status") or result.get("status")
-                
-                if scans:
-                    order.tracking_data = json.dumps(scans)
-                if current_status:
-                    varaha_status = RAPIDSHYP_STATUS_MAP.get(current_status.upper(), order.status)
-                    order.status = varaha_status
-                    
-                session.add(order)
-                session.commit()
-        except Exception as e:
-            print(f"[LIVE TRACKING] Error fetching live Rapidshyp data for order {order_id}: {e}")
-
     # Parse tracking data
     try:
         tracking_history = json.loads(order.tracking_data or "[]")
@@ -311,7 +306,7 @@ def get_tracking_step(status: str) -> int:
         "out_for_delivery": 5,
         "delivered": 6
     }
-    return step_map.get(str(status).lower(), 1)
+    return step_map.get(status, 1)
 
 def get_estimated_delivery(order) -> Optional[str]:
     """Calculate estimated delivery based on order date."""
@@ -332,7 +327,7 @@ def get_steps_info(order) -> list:
             "description": "Order confirmed",
             "completed": current_step >= 1,
             "active": current_step == 1,
-            "date": (order.created_at + __import__('datetime').timedelta(hours=5, minutes=30)).strftime("%d %b, %I:%M %p") if order.created_at else None
+            "date": order.created_at.strftime("%d %b, %I:%M %p") if order.created_at else None
         },
         {
             "step": 2,
@@ -379,83 +374,4 @@ def get_steps_info(order) -> list:
     return steps
 
 
-# ============================================
-# PUBLIC ORDER LOOKUP (No Login Required)
-# Customer enters email or phone to see orders
-# ============================================
-
-@router.post("/api/track/lookup")
-def lookup_orders_for_tracking(payload: TrackLookupRequest, session: Session = Depends(get_session)):
-    """
-    Public endpoint: Customer enters email or phone to look up their orders.
-    Returns order list with tracking info & public tracking links.
-    No authentication required.
-    """
-    email = (payload.email or "").strip().lower()
-    raw_phone = (payload.phone or "").strip()
-    
-    if not email and not raw_phone:
-        raise HTTPException(status_code=400, detail="Please provide email or phone number")
-    
-    clean_phone = ""
-    if raw_phone:
-        clean_phone = ''.join(filter(str.isdigit, raw_phone))
-        if len(clean_phone) >= 10:
-            clean_phone = clean_phone[-10:]
-        else:
-            clean_phone = raw_phone
-            
-    # Build query — match by email OR phone
-    if email and clean_phone:
-        print(f"CLEAN PHONE: {clean_phone}"); orders = session.exec(
-            select(Order).where(
-                (Order.email == email) | (Order.phone.contains(clean_phone))
-            ).order_by(Order.created_at.desc())  # type: ignore
-        ).all()
-    elif email:
-        print(f"CLEAN PHONE: {clean_phone}"); orders = session.exec(
-            select(Order).where(Order.email == email).order_by(Order.created_at.desc())  # type: ignore
-        ).all()
-    else:
-        print(f"CLEAN PHONE: {clean_phone}"); orders = session.exec(
-            select(Order).where(Order.phone.contains(clean_phone)).order_by(Order.created_at.desc())  # type: ignore
-        ).all()
-    
-    if not orders:
-        raise HTTPException(status_code=404, detail="No orders found. Please check your email or phone number.")
-    
-    # Build response — limited info (public-safe)
-    result = []
-    for order in orders:
-        # Parse items
-        items = []
-        try:
-            items = json.loads(order.items_json or "[]")
-        except:
-            pass
-        
-        # Get product names for display
-        product_names = [item.get("productName", item.get("name", "Product")) for item in items]
-        
-        # Generate tracking token for public tracking link
-        tracking_token = generate_tracking_token(order.order_id)
-        
-        result.append({
-            "order_id": order.order_id,
-            "status": order.status,
-            "total_amount": order.total_amount,
-            "payment_method": order.payment_method,
-            "created_at": order.created_at.isoformat() if order.created_at else None,
-            "customer_name": order.customer_name,
-            "product_names": product_names,
-            "item_count": len(items),
-            "awb_number": order.awb_number,
-            "courier_name": order.courier_name,
-            "current_step": get_tracking_step(order.status),
-            "tracking_token": tracking_token,
-            "tracking_url": f"/track/{order.order_id}_{tracking_token}",
-            "steps": get_steps_info(order)
-        })
-    
-    return {"orders": result, "count": len(result)}
-
+# =====================================

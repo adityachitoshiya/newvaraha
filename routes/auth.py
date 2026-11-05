@@ -21,8 +21,6 @@ router = APIRouter()
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
-# --- 2FA Storage (In-Memory for simplicity) ---
-otp_storage = {}
 
 # --- Schemas ---
 
@@ -111,8 +109,13 @@ def telegram_login(data: TelegramAuth, session: Session = Depends(get_session)):
     hash_payload = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
     
     # Check if hash matches
-    if hash_payload != data.hash:
+    if not hmac.compare_digest(hash_payload, data.hash):
         raise HTTPException(status_code=400, detail="Data integrity check failed")
+
+    # Reject old login payloads (replay protection) - valid for 1 day
+    import time as _time
+    if abs(int(_time.time()) - int(data.auth_date)) > 86400:
+        raise HTTPException(status_code=400, detail="Telegram login expired. Please try again.")
 
     # 2. Check/Create User
     telegram_id = str(data.id)
@@ -177,7 +180,7 @@ def firebase_auth(
     
     firebase_uid = firebase_user.get("uid")
     email = firebase_user.get("email")
-    name = firebase_user.get("name") or email.split("@")[0] if email else "User"
+    name = firebase_user.get("name") or (email.split("@")[0] if email else "User")
     phone = firebase_user.get("phone_number")
     provider = firebase_user.get("sign_in_provider", "firebase")
     
@@ -216,7 +219,7 @@ def firebase_auth(
     # Create new customer if not found
     if not customer:
         # Use phone as email placeholder if email not available
-        customer_email = email or f"{phone}@phone.user" if phone else f"{firebase_uid}@firebase.user"
+        customer_email = email or (f"{phone}@phone.user" if phone else f"{firebase_uid}@firebase.user")
         
         customer = Customer(
             full_name=name,
@@ -231,23 +234,11 @@ def firebase_auth(
         session.refresh(customer)
         print(f"✅ Created new customer {customer.id} from Firebase auth")
     
-    # 3. Link any guest orders to this customer
-    if email:
-        guest_orders = session.exec(
-            select(Order).where(
-                Order.email == email,
-                Order.user_id == None
-            )
-        ).all()
-        
-        for order in guest_orders:
-            order.user_id = customer.id
-            session.add(order)
-        
-        if guest_orders:
-            session.commit()
-            print(f"✅ Linked {len(guest_orders)} guest orders to customer {customer.id}")
-    
+    # 3. Guest orders are matched to this customer by email/phone in
+    #    /api/customer/orders - no DB linking needed here.
+    #    (Old code wrote the integer customer.id into the UUID user_id column,
+    #     which crashed login for anyone with previous guest orders.)
+
     # 4. Issue local JWT
     access_token = create_access_token(data={
         "sub": customer.email,
@@ -309,6 +300,27 @@ def google_oauth_auth(
     if user_info.get("error"):
         raise HTTPException(status_code=401, detail="Google token verification failed")
 
+    # Make sure the access token was issued for OUR Google client (prevents token
+    # substitution from other apps). Enabled when GOOGLE_CLIENT_ID is set.
+    expected_client_id = os.getenv("GOOGLE_CLIENT_ID") or os.getenv("NEXT_PUBLIC_GOOGLE_CLIENT_ID")
+    if expected_client_id:
+        try:
+            info = ext_requests.get(
+                "https://oauth2.googleapis.com/tokeninfo",
+                params={"access_token": request.access_token},
+                timeout=10,
+            ).json()
+            if info.get("aud") != expected_client_id and info.get("azp") != expected_client_id:
+                raise HTTPException(status_code=401, detail="Google token was not issued for this app")
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Google tokeninfo check failed: {e}")
+            raise HTTPException(status_code=401, detail="Google token verification failed")
+
+    if user_info.get("verified_email") is False:
+        raise HTTPException(status_code=401, detail="Google email is not verified")
+
     email = user_info.get("email")
     name = user_info.get("name") or (email.split("@")[0] if email else "User")
     google_id = user_info.get("id")
@@ -343,21 +355,7 @@ def google_oauth_auth(
         session.refresh(customer)
         print(f"✅ Created new customer {customer.id} from Google OAuth")
 
-    # 3. Link any guest orders to this customer
-    guest_orders = session.exec(
-        select(Order).where(
-            Order.email == email,
-            Order.user_id == None
-        )
-    ).all()
-
-    for order in guest_orders:
-        order.user_id = customer.id
-        session.add(order)
-
-    if guest_orders:
-        session.commit()
-        print(f"✅ Linked {len(guest_orders)} guest orders to customer {customer.id}")
+    # 3. Guest orders are matched by email in /api/customer/orders (no DB linking needed).
 
     # 4. Issue local JWT
     access_token = create_access_token(data={
@@ -381,23 +379,42 @@ def google_oauth_auth(
     )
 
 
+ADMIN_OTP_MAX_ATTEMPTS = 5
+
+
+def _admin_otp_key(username: str) -> str:
+    return f"admin:{username}"
+
+
 @router.post("/api/admin/verify-otp", response_model=Token)
-def verify_admin_otp(data: VerifyOTP):
+def verify_admin_otp(data: VerifyOTP, session: Session = Depends(get_session)):
+    import hmac as _hmac
+    from models import VerificationCode
     username = data.username
-    record = otp_storage.get(username)
+    record = session.get(VerificationCode, _admin_otp_key(username))
     
     if not record:
         raise HTTPException(status_code=400, detail="OTP request not found or expired")
     
-    if datetime.now() > record['expires']:
-        del otp_storage[username]
+    if datetime.utcnow() > record.expires_at:
+        session.delete(record)
+        session.commit()
         raise HTTPException(status_code=400, detail="OTP expired")
+
+    if record.attempts >= ADMIN_OTP_MAX_ATTEMPTS:
+        session.delete(record)
+        session.commit()
+        raise HTTPException(status_code=429, detail="Too many wrong attempts. Please login again.")
         
-    if data.otp != record['code']:
-         raise HTTPException(status_code=400, detail="Invalid OTP")
+    if not _hmac.compare_digest(str(data.otp).strip(), record.code):
+        record.attempts += 1
+        session.add(record)
+        session.commit()
+        raise HTTPException(status_code=400, detail="Invalid OTP")
          
-    # OTP Valid - Issue Token
-    del otp_storage[username] # One-time use
+    # OTP Valid - Issue Token (one-time use)
+    session.delete(record)
+    session.commit()
     access_token = create_access_token(data={"sub": username, "role": "admin"})
     return {"access_token": access_token, "token_type": "bearer"}
 
@@ -406,24 +423,27 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), ses
     # print(f"DEBUG: Login Attempt for: {form_data.username}") # REMOVED LOG
     user = session.exec(select(AdminUser).where(AdminUser.username == form_data.username)).first()
     
-    if not user:
-        # print("DEBUG: AdminUser NOT FOUND in DB.") # REMOVED LOG
-        raise HTTPException(status_code=401, detail="User not found")
-        
-    valid_pwd = verify_password(form_data.password, user.hashed_password)
-    # print(f"DEBUG: Password Valid? {valid_pwd}") # REMOVED LOG
+    # Same message for wrong user / wrong password (no username enumeration)
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
     
-    if not valid_pwd:
-        raise HTTPException(status_code=401, detail="Invalid password")
-    
-    # 2FA Logic
-    otp = "".join([str(random.randint(0, 9)) for _ in range(6)])
-    expiration = datetime.now() + timedelta(minutes=5)
-    
-    otp_storage[user.username] = {
-        "code": otp,
-        "expires": expiration
-    }
+    # 2FA Logic - stored in DB so it works across multiple server workers
+    import secrets as _secrets
+    from models import VerificationCode
+    otp = "".join(_secrets.choice("0123456789") for _ in range(6))
+    expiration = datetime.utcnow() + timedelta(minutes=5)
+
+    key = _admin_otp_key(user.username)
+    record = session.get(VerificationCode, key)
+    if record:
+        record.code = otp
+        record.expires_at = expiration
+        record.attempts = 0
+        record.created_at = datetime.utcnow()
+    else:
+        record = VerificationCode(phone=key, code=otp, expires_at=expiration)
+    session.add(record)
+    session.commit()
     
     # Send Telegram
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -465,9 +485,13 @@ def check_email_exists(email: str, session: Session = Depends(get_session)):
         }
     return {"exists": False}
 
-@router.post("/api/auth/signup", response_model=Customer)
+@router.post("/api/auth/signup")
 def customer_signup(customer_data: CustomerCreate, session: Session = Depends(get_session)):
-    existing_user = session.exec(select(Customer).where(Customer.email == customer_data.email)).first()
+    if len(customer_data.password or "") < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    customer_data.email = customer_data.email.strip().lower()
+    from sqlalchemy import func as _func
+    existing_user = session.exec(select(Customer).where(_func.lower(Customer.email) == customer_data.email)).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     
@@ -481,11 +505,17 @@ def customer_signup(customer_data: CustomerCreate, session: Session = Depends(ge
     session.add(new_customer)
     session.commit()
     session.refresh(new_customer)
-    return new_customer
+    return {
+        "id": new_customer.id,
+        "full_name": new_customer.full_name,
+        "email": new_customer.email,
+        "provider": new_customer.provider,
+    }
 
 @router.post("/api/auth/login")
 def customer_login(login_data: CustomerLogin, session: Session = Depends(get_session)):
-    customer = session.exec(select(Customer).where(Customer.email == login_data.email)).first()
+    from sqlalchemy import func as _func
+    customer = session.exec(select(Customer).where(_func.lower(Customer.email) == login_data.email.strip().lower())).first()
     if not customer or not customer.hashed_password or not pwd_context.verify(login_data.password, customer.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
@@ -508,13 +538,21 @@ def sync_user(user_data: UserSync, token: str = Depends(oauth2_scheme), session:
     s_client = init_supabase()
     uid = None
     
-    if s_client:
+    email_from_token = None
+    if s_client and token:
         try:
             u_data = s_client.auth.get_user(token)
             if u_data and u_data.user:
                 uid = u_data.user.id
-        except:
-             pass
+                email_from_token = u_data.user.email
+        except Exception:
+            pass
+
+    if not uid:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    # Never trust the email sent in the body - use the verified one
+    if email_from_token:
+        user_data.email = email_from_token
     
     # Logic: Find by UID -> Find by Email -> Create
     customer = None
@@ -556,21 +594,6 @@ def sync_user(user_data: UserSync, token: str = Depends(oauth2_scheme), session:
     
     return {"ok": True, "customer_id": customer.id}
 
-@router.post("/api/auth/social-login")
-def social_login(social_data: SocialLogin, session: Session = Depends(get_session)):
-    # Legacy/Alternative endpoint, kept for backward compat if needed
-    customer = session.exec(select(Customer).where(Customer.email == social_data.email)).first()
-    if not customer:
-        customer = Customer(
-            full_name=social_data.full_name,
-            email=social_data.email,
-            provider=social_data.provider,
-            is_active=True
-        )
-        session.add(customer)
-        session.commit()
-        session.refresh(customer)
-    
-    # We still issue a local token here for the old flow, but we are moving away from it
-    token = create_access_token(data={"sub": customer.email, "role": "customer", "name": customer.full_name})
-    return {"access_token": token, "token_type": "bearer", "user": {"name": customer.full_name, "email": customer.email}}
+# NOTE: /api/auth/social-login was removed - it issued a login token for ANY
+# email without verification (account takeover). Use /api/auth/google or
+# /api/auth/firebase instead.
