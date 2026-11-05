@@ -1,6 +1,15 @@
 import smtplib
 import requests
 import os
+
+
+def _order_access_key(order_id):
+    """Signed key that lets a guest open their own order page from an email link."""
+    try:
+        from routes.tracking import generate_tracking_token
+        return generate_tracking_token(str(order_id or ""))
+    except Exception:
+        return ""
 import resend
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -23,31 +32,16 @@ def send_order_notifications(order_data):
     Args:
         order_data (dict): Contains 'order_id' and 'total_amount' (and optionally 'items' or 'items_json').
     """
-    logger.info(f"🔔 BACKGROUND TASK TRIGGERED for Order: {order_data.get('order_id')}")
-    
-    # ── AUTO-PARSE items from items_json if items list is missing ──
-    # Order.dict() only gives items_json (string), not items (list)
-    if not order_data.get('items') and order_data.get('items_json'):
-        try:
-            parsed_items = json.loads(order_data['items_json'])
-            if isinstance(parsed_items, list):
-                order_data['items'] = parsed_items
-                logger.info(f"✅ Parsed {len(parsed_items)} items from items_json")
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.error(f"❌ Failed to parse items_json: {e}")
-            order_data['items'] = []
-    
+    logging.error("BACKGROUND TASK TRIGGERED")
     logger.info(f"Preparing to send notifications for Order: {order_data.get('order_id')}")
     
     # --- 1. Email Notification ---
     try:
-        # Robust sender email fallback: EMAIL_USER → EMAIL_SENDER → EMAIL_FROM
-        sender_email = os.getenv("EMAIL_USER") or os.getenv("EMAIL_SENDER") or os.getenv("EMAIL_FROM")
+        # Support user's preferred env var 'EMAIL_USER' matching the guide, fallback to 'EMAIL_SENDER'
+        sender_email = os.getenv("EMAIL_USER") or os.getenv("EMAIL_SENDER")
         sender_password = os.getenv("EMAIL_PASSWORD") 
         # Support for alias: authenticate with sender_email, but send as sender_alias if set
-        sender_alias = os.getenv("EMAIL_FROM") or os.getenv("EMAIL_SENDER") or sender_email
-        
-        logger.info(f"📧 Email Config: provider={os.getenv('EMAIL_PROVIDER')}, sender={sender_email}, alias={sender_alias}")
+        sender_alias = os.getenv("EMAIL_FROM", sender_email)
         
         # Admin Email
         admin_email = os.getenv("ADMIN_EMAIL")
@@ -102,12 +96,6 @@ def send_order_notifications(order_data):
         
         if customer_email:
             subject_customer = f"Order Confirmation - {product_names} | Varaha Jewels"
-            
-            # Generate tracking token for public tracking link
-            import hashlib
-            tracking_secret = os.getenv("TRACKING_SECRET", "varaha_track_secret_2026")
-            tracking_token = hashlib.sha256(f"{order_data.get('order_id')}_{tracking_secret}".encode()).hexdigest()[:16]
-            tracking_url = f"{os.getenv('FRONTEND_URL', 'https://varahajewels.in')}/track/{order_data.get('order_id')}_{tracking_token}"
             # Prepare items HTML
             items_html = ""
             items = order_data.get('items', [])
@@ -265,8 +253,7 @@ def send_order_notifications(order_data):
 
                                                     <!-- CTA Button -->
                                                     <div class="btn-container">
-                                                        <a href="{tracking_url}" class="btn" style="margin-right: 10px;">Track Order</a>
-                                                        <a href="{os.getenv('FRONTEND_URL', 'https://varahajewels.com')}/orders/{order_data.get('order_id')}" class="btn" style="background-color: transparent; color: #1a1a1a;">View Order Details</a>
+                                                        <a href="{os.getenv('FRONTEND_URL', 'https://varahajewels.in')}/orders/{order_data.get('order_id')}?key={_order_access_key(order_data.get('order_id'))}" class="btn">View Order Details</a>
                                                     </div>
                                                     
                                                     <p style="text-align: center; font-size: 14px; color: #777; margin-top: 30px; font-family: 'Helvetica', sans-serif;">
@@ -493,63 +480,11 @@ def send_order_notifications(order_data):
         chat_id = os.getenv("TELEGRAM_CHAT_ID")
         
         if bot_token and chat_id:
-            # Build items list for Telegram
-            tg_items = order_data.get('items', [])
-            if not tg_items and order_data.get('items_json'):
-                try:
-                    tg_items = json.loads(order_data['items_json'])
-                except:
-                    tg_items = []
-            
-            items_text = ""
-            for idx, item in enumerate(tg_items, 1):
-                name = item.get('productName', item.get('name', 'Product'))
-                qty = item.get('quantity', 1)
-                price = item.get('price', 0)
-                items_text += f"  {idx}. {name} × {qty} — ₹{price}\n"
-            if not items_text:
-                items_text = "  (No items data)\n"
-            
-            # Payment mode
-            pay_method = order_data.get('payment_method', 'N/A').upper()
-            if pay_method == 'COD':
-                pay_emoji = '🏠'
-                pay_label = 'Cash on Delivery'
-            else:
-                pay_emoji = '💳'
-                pay_label = 'Online (Prepaid)'
-            
-            # Discount info
-            discount_text = ""
-            discount_amt = order_data.get('discount_amount', 0)
-            original_amt = order_data.get('original_amount', 0)
-            if discount_amt and discount_amt > 0:
-                discount_text = f"🏷️ *Discount:* -₹{discount_amt}\n"
-                if original_amt:
-                    discount_text = f"💲 *Subtotal:* ₹{original_amt}\n" + discount_text
-
-            # Full address
-            address_parts = [
-                order_data.get('address', ''),
-                order_data.get('city', ''),
-                order_data.get('state', ''),
-                order_data.get('pincode', '')
-            ]
-            full_address = ', '.join([p for p in address_parts if p])
-
             message = (
-                f"🛍️ *NEW ORDER RECEIVED!*\n"
-                f"━━━━━━━━━━━━━━━━━━\n\n"
-                f"🆔 *Order ID:* `{order_data.get('order_id')}`\n\n"
-                f"👤 *Customer:* {order_data.get('customer_name', 'N/A')}\n"
-                f"📞 *Phone:* {order_data.get('phone', 'N/A')}\n"
-                f"📧 *Email:* {order_data.get('email', 'N/A')}\n\n"
-                f"📦 *Items:*\n{items_text}\n"
-                f"{discount_text}"
-                f"💰 *Total Amount:* ₹{order_data.get('total_amount', 0)}\n"
-                f"{pay_emoji} *Payment:* {pay_label}\n\n"
-                f"📍 *Delivery Address:*\n{full_address}\n\n"
-                f"━━━━━━━━━━━━━━━━━━"
+                f"🛍️ *New Order Received!*\n\n"
+                f"🆔 *Order ID:* `{order_data.get('order_id')}`\n"
+                f"💰 *Amount:* ₹{order_data.get('total_amount', 0)}\n\n"
+                f"Check admin panel for details."
             )
             
             url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -587,7 +522,7 @@ def send_shipping_notifications(order_data):
 
         subject = f"Your Order has been Shipped! - {order_data.get('order_id')} | Varaha Jewels"
         
-        tracking_url = f"{os.getenv('FRONTEND_URL', 'https://varahajewels.com')}/orders/{order_data.get('order_id')}"
+        tracking_url = f"{os.getenv('FRONTEND_URL', 'https://varahajewels.in')}/orders/{order_data.get('order_id')}?key={_order_access_key(order_data.get('order_id'))}"
         
         body_html = f"""
         <!DOCTYPE html>
@@ -673,8 +608,8 @@ def send_tracking_notification(order, status: str):
             return
         
         # Generate tracking token
-        tracking_secret = os.getenv("TRACKING_SECRET", "varaha_track_secret_2026")
-        tracking_token = hashlib.sha256(f"{order.order_id}_{tracking_secret}".encode()).hexdigest()[:16]
+        from routes.tracking import generate_tracking_token
+        tracking_token = generate_tracking_token(order.order_id)
         tracking_url = f"{frontend_url}/track/{order.order_id}_{tracking_token}"
         
         subject = None

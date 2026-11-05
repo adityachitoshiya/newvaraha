@@ -18,6 +18,7 @@ if database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
 
 connect_args = {}
+_SQL_ECHO = os.getenv("SQL_ECHO", "false").lower() == "true"
 
 # Only use check_same_thread for SQLite
 if "sqlite" in database_url:
@@ -40,7 +41,7 @@ print(f"🔌 Database Connection: {masked_url}")
 if "sqlite" in database_url:
     print("⚠️  WARNING: Using local SQLite database. Data will NOT be synced to Supabase.")
     connect_args["check_same_thread"] = False
-    engine = create_engine(database_url, echo=True, connect_args=connect_args)
+    engine = create_engine(database_url, echo=_SQL_ECHO, connect_args=connect_args)
 else:
     print("✅ Using Remote Database (Supabase/PostgreSQL)")
     
@@ -53,7 +54,7 @@ else:
     # Optimize connection pool for remote DB to prevent timeouts
     engine = create_engine(
         database_url, 
-        echo=True, 
+        echo=_SQL_ECHO,  # SQL logging off by default (was leaking customer data into logs)
         connect_args=connect_args,
         pool_pre_ping=True, 
         pool_recycle=280, # Recycle before Supabase's 5-minute idle timeout

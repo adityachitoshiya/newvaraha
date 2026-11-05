@@ -107,9 +107,9 @@ async def require_app_secret(x_app_key: Optional[str] = Header(None)):
     Requires 'x-app-key' header to match the server secret.
     """
     import os
-    expected_secret = os.getenv("APP_SECRET", "varaha_secure_key_123")
+    expected_secret = os.getenv("APP_SECRET")
     
-    if x_app_key != expected_secret:
+    if not expected_secret or x_app_key != expected_secret:
         # Simulate a generic 403 or 404 to confuse direct access
         raise HTTPException(
             status_code=403, 

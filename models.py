@@ -181,7 +181,7 @@ class CreatorVideo(SQLModel, table=True):
 class StoreSettings(SQLModel, table=True):
     id: Optional[int] = Field(default=1, primary_key=True)
     store_name: str = "Varaha Jewels"
-    support_email: str = "support@varahajewels.com"
+    support_email: str = "help@varahajewels.in"
     currency_symbol: str = "₹"
     announcement_text: str = "Grand Launch In:"
     announcement_date: str = "2026-02-12T00:00:00"
@@ -216,16 +216,8 @@ class StoreSettings(SQLModel, table=True):
     prepaid_discount_enabled: bool = True
     prepaid_discount_percent: int = 5
 
-    # Price-Based Shipping Override (Admin-controlled)
-    # If any individual product is below this price threshold, a mandatory shipping fee applies
-    minimum_product_price_for_free_shipping: float = 99.0  # Minimum ₹99 default
-    mandatory_shipping_charge: float = 50.0  # Default ₹50 shipping fee
-
     # Heritage / Featured Collections Cards (Admin-controlled)
     heritage_cards_json: str = '[{"title":"Heritage Collection","description":"Timeless pieces inspired by royal traditions","image":"/varaha-assets/heroimage.avif","href":"/shop?category=Heritage"},{"title":"Bridal Elegance","description":"Exquisite adornments for your special day","image":"/varaha-assets/Jimage2.avif","href":"/shop?category=Bridal"},{"title":"Contemporary Classics","description":"Modern designs with traditional soul","image":"/varaha-assets/Jimage3.webp","href":"/shop?category=Contemporary"},{"title":"Temple Treasures","description":"Sacred artistry in every detail","image":"/varaha-assets/herosection2.jpg","href":"/shop?category=Temple"}]'
-
-    # Homepage testimonials (Admin-controlled)
-    testimonials_json: str = '[{"id":1,"name":"Priya Sharma","location":"Mumbai","rating":5,"text":"The craftsmanship is absolutely exquisite. I purchased a bridal set for my wedding, and it became the centerpiece of my entire ensemble. The attention to detail is remarkable.","image":"/varaha-assets/dp1.avif","verified":true,"platform":"Amazon"},{"id":2,"name":"Anjali Reddy","location":"Hyderabad","rating":5,"text":"Varaha Jewels perfectly blends traditional artistry with contemporary elegance. Each piece feels like wearing a piece of heritage. Truly exceptional quality.","image":"/varaha-assets/DP.png","verified":true,"platform":"Flipkart"},{"id":3,"name":"Kavita Mehta","location":"Delhi","rating":5,"text":"I have been a loyal customer for over a decade. The timeless designs and impeccable service keep me coming back. These are heirlooms I will pass to my daughters.","image":"/varaha-assets/dp3.avif","verified":true,"platform":"Amazon"}]'
 
 
 
@@ -378,3 +370,48 @@ class VerificationCode(SQLModel, table=True):
     expires_at: datetime
     created_at: datetime = Field(default_factory=datetime.utcnow)
     attempts: int = 0
+
+
+class PendingCheckout(SQLModel, table=True):
+    """
+    Server-side snapshot of an online-payment checkout.
+    Created when the Razorpay/PhonePe payment is started; the paid order is
+    built ONLY from this record (never from data the browser sends later),
+    after the gateway confirms the exact amount was paid.
+    """
+    gateway_order_id: str = Field(primary_key=True)  # Razorpay order id / PhonePe merchantOrderId
+    provider: str
+    order_data_json: str = "{}"   # customer + address details
+    items_json: str = "[]"        # server-priced items
+    subtotal: float = 0.0
+    coupon_code: Optional[str] = None
+    coupon_discount: float = 0.0
+    prepaid_discount: float = 0.0
+    amount: float = 0.0           # final amount charged (INR)
+    amount_paise: int = 0
+    user_id: Optional[str] = None # Supabase UUID (if any)
+    order_id: Optional[str] = Field(default=None, index=True)  # set once the order is created
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CouponRule(SQLModel, table=True):
+    """
+    Extra rules for a coupon (kept in a separate table so the existing
+    `coupon` table does not need a migration).
+    """
+    code: str = Field(primary_key=True)          # same as Coupon.code (UPPERCASE)
+    starts_at: Optional[datetime] = None          # UTC, None = active immediately
+    expires_at: Optional[datetime] = None         # UTC, None = never expires
+    usage_limit: Optional[int] = None             # total uses allowed, None = unlimited
+    per_customer_limit: Optional[int] = None      # uses per customer (email/phone), None = unlimited
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class CouponUsage(SQLModel, table=True):
+    """One row per order that used a coupon (for usage limits)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    code: str = Field(index=True)
+    order_id: str = Field(index=True)
+    email: Optional[str] = Field(default=None, index=True)
+    phone: Optional[str] = Field(default=None, index=True)   # last 10 digits
+    created_at: datetime = Field(default_factory=datetime.utcnow)

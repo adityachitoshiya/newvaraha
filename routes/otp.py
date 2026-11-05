@@ -241,35 +241,7 @@ async def otp_health_check():
         "provider": "MSG91"
     }
 
-@router.post("/api/test/send-otp")
-async def test_send_otp(phone: str, template_id: str = None):
-    """
-    Test endpoint to manually send OTP via MSG91 (Server-side trigger)
-    Not used in production Widget flow, but useful for testing credentials.
-    """
-    auth_key = os.getenv("MSG91_AUTH_KEY")
-    if not auth_key:
-        return {"error": "MSG91_AUTH_KEY not set"}
-    
-    # Send OTP URL
-    url = "https://control.msg91.com/api/v5/otp"
-    
-    params = {
-        "mobile": phone,
-        "authkey": auth_key
-    }
-    if template_id:
-        params["template_id"] = template_id
-        
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, params=params)
-            return {
-                "status_code": response.status_code,
-                "msg91_response": response.json()
-            }
-    except Exception as e:
-        return {"error": str(e)}
+# /api/test/send-otp removed: it let anyone send unlimited OTP SMS on your MSG91 account.
 
 
 # ==========================================
@@ -307,13 +279,21 @@ async def send_custom_otp(request: CustomOTPRequest, session: Session = Depends(
         elif len(phone) == 12 and phone.startswith("91"):
              phone = "+" + phone
              
-    # 1. Generate 6-digit OTP
-    otp_code = "".join(random.choices(string.digits, k=6))
+    import re as _re
+    if not _re.fullmatch(r"\+91[6-9]\d{9}", phone):
+        raise HTTPException(status_code=400, detail="Please enter a valid Indian mobile number")
+
+    # 1. Generate 6-digit OTP (cryptographically secure)
+    import secrets as _secrets
+    otp_code = "".join(_secrets.choice(string.digits) for _ in range(6))
     
     # 2. Store in DB (Upsert)
     expiry = datetime.utcnow() + timedelta(minutes=5)
     
     existing_code = session.get(VerificationCode, phone)
+    # Rate limit: one OTP per number every 60 seconds
+    if existing_code and existing_code.created_at and (datetime.utcnow() - existing_code.created_at).total_seconds() < 60:
+        raise HTTPException(status_code=429, detail="Please wait a minute before requesting another OTP")
     if existing_code:
         existing_code.code = otp_code
         existing_code.expires_at = expiry
@@ -387,9 +367,17 @@ async def verify_custom_otp(request: CustomOTPVerify, session: Session = Depends
         
     if datetime.utcnow() > record.expires_at:
         raise HTTPException(status_code=400, detail="OTP expired")
+
+    # Brute-force protection: max 5 wrong attempts per OTP
+    if (record.attempts or 0) >= 5:
+        session.delete(record)
+        session.commit()
+        raise HTTPException(status_code=429, detail="Too many wrong attempts. Please request a new OTP.")
         
-    if record.code != request.otp:
-        record.attempts += 1
+    import hmac as _hmac
+    if not _hmac.compare_digest(str(request.otp or "").strip(), record.code):
+        record.attempts = (record.attempts or 0) + 1
+        session.add(record)
         session.commit()
         raise HTTPException(status_code=400, detail="Invalid OTP")
         
@@ -410,7 +398,8 @@ async def verify_custom_otp(request: CustomOTPVerify, session: Session = Depends
         # ... Reuse logic ...
         # For brevity, let's call a helper or duplicate lightly
         
-        random_password = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+        import secrets as _secrets
+        random_password = "".join(_secrets.choice(string.ascii_letters + string.digits) for _ in range(20))
         
         # Try Sign Up
         try:

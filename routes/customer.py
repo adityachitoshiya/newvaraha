@@ -402,26 +402,32 @@ def create_return_request(
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-    # Verify order belongs to this customer (by email or user_id)
-    if order.user_id:
-        # If order has user_id, it must match current user's supabase ID
-        # Note: current_user.id is the customer table ID, not supabase UUID
-        # For now, check email match
-        if order.email != current_user.email:
-            raise HTTPException(status_code=403, detail="Order does not belong to you")
-    else:
-        if order.email != current_user.email:
-            raise HTTPException(status_code=403, detail="Order does not belong to you")
+    # Verify order belongs to this customer (UUID / email / verified phone)
+    from order_access import identity_owns_order
+    if not isinstance(current_user, Customer):
+        raise HTTPException(status_code=403, detail="Only customers can request returns")
+    ident = {"customer": current_user, "email": current_user.email,
+             "supabase_uid": current_user.supabase_uid, "is_admin": False}
+    if not identity_owns_order(ident, order):
+        raise HTTPException(status_code=403, detail="Order does not belong to you")
     
     # Check if order is delivered
-    if order.status.lower() not in ['delivered', 'completed']:
+    if (order.status or "").lower() not in ['delivered', 'completed']:
         raise HTTPException(status_code=400, detail="Return request can only be made for delivered orders")
     
-    # Check 7-day return window
-    if order.updated_at:
-        days_since_delivery = (datetime.utcnow() - order.updated_at).days
-        if days_since_delivery > 7:
-            raise HTTPException(status_code=400, detail="Return window has expired (7 days from delivery)")
+    # Check 7-day return window (from the "delivered" entry in status history).
+    # NOTE: Order has no updated_at column - the old code crashed here on every request.
+    delivered_at = None
+    try:
+        for entry in json.loads(order.status_history or "[]"):
+            if str(entry.get("status", "")).lower() in ("delivered", "completed") and entry.get("timestamp"):
+                delivered_at = datetime.fromisoformat(str(entry["timestamp"]).replace("Z", "").split("+")[0])
+    except Exception:
+        delivered_at = None
+    if delivered_at is None:
+        delivered_at = order.created_at
+    if delivered_at and (datetime.utcnow() - delivered_at).days > 7:
+        raise HTTPException(status_code=400, detail="Return window has expired (7 days from delivery)")
     
     # Check if return already exists for this order
     existing_return = session.exec(
@@ -446,7 +452,11 @@ def create_return_request(
                     item = order_items[idx]
                     partial_total += item.get('price', 0) * item.get('quantity', 1)
                     selected_items.append(item)
-            refund_amount = partial_total
+            # Scale by what the customer actually paid (coupon/prepaid discounts)
+            if order.original_amount and order.original_amount > 0:
+                paid_ratio = min(1.0, (order.total_amount or 0) / order.original_amount)
+                partial_total = partial_total * paid_ratio
+            refund_amount = round(min(partial_total, order.total_amount or partial_total), 2)
             return_items = selected_items
         except:
             pass

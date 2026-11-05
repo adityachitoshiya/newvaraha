@@ -4,6 +4,8 @@ from typing import List
 from database import get_session
 from category_model import Category, CategoryBase
 from datetime import datetime
+from dependencies import get_current_admin
+from models import AdminUser
 
 router = APIRouter()
 
@@ -38,7 +40,7 @@ def get_category(category_id: int, session: Session = Depends(get_session)):
     return category
 
 @router.post("/api/categories", response_model=Category)
-def create_category(category: CategoryBase, session: Session = Depends(get_session)):
+def create_category(category: CategoryBase, session: Session = Depends(get_session), current_user: AdminUser = Depends(get_current_admin)):
     """Create a new category"""
     # Check if category name already exists
     existing = session.exec(
@@ -58,7 +60,8 @@ def create_category(category: CategoryBase, session: Session = Depends(get_sessi
 def update_category(
     category_id: int,
     category_update: CategoryBase,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: AdminUser = Depends(get_current_admin)
 ):
     """Update a category"""
     db_category = session.get(Category, category_id)
@@ -83,7 +86,7 @@ def update_category(
     return db_category
 
 @router.delete("/api/categories/{category_id}")
-def delete_category(category_id: int, session: Session = Depends(get_session)):
+def delete_category(category_id: int, session: Session = Depends(get_session), current_user: AdminUser = Depends(get_current_admin)):
     """Delete a category"""
     category = session.get(Category, category_id)
     if not category:

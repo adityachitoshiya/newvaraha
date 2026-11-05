@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 from pathlib import Path
+import os
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
@@ -10,6 +11,13 @@ from database import create_db_and_tables
 from middleware import MonitoringMiddleware
 # Import Routers
 from routes import auth, customer, products, cart, orders, gateways, admin, settings, coupons, analytics, health, dashboard, notifications, reports, tracking, otp, web, categories, wishlist, promotions
+
+# Blogs router is optional - routes/blogs.py is not present in this folder.
+try:
+    from routes import blogs
+except ImportError:
+    blogs = None
+    print("ℹ️  routes/blogs.py not found - Blogs API disabled")
 
 import logging
 from monitoring import monitor
@@ -57,12 +65,15 @@ origins = [
     "https://172.31.37.124",
 ]
 
+# Extra allowed origins from the environment, comma separated (used by the
+# local test server so phones on the same Wi-Fi can reach it). Empty in production.
+origins += [o.strip() for o in os.getenv("EXTRA_CORS_ORIGINS", "").split(",") if o.strip()]
+
 app.add_middleware(MonitoringMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex=r".*", # Fallback to allow all regex if specific origins fail (useful across Vercel/AWS)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -79,6 +90,8 @@ def on_startup():
         print("🚀 Running Master Migration...")
         run_master_migration()
         print("✅ Master Migration Completed")
+    except ImportError:
+        pass  # migration_master.py not present - nothing to run
     except Exception as e:
         logger.error(f"Master Migration Failed: {e}")
 
@@ -87,6 +100,8 @@ def on_startup():
 app.include_router(web.router, tags=["Web"]) 
 
 app.include_router(auth.router, tags=["Authentication"])
+# Wishlist BEFORE customer: frontend expects the product-ID list format from routes/wishlist.py
+app.include_router(wishlist.router, tags=["Wishlist"])
 app.include_router(customer.router, tags=["Customer"])
 app.include_router(products.router, tags=["Products"])
 app.include_router(cart.router, tags=["Cart"])
@@ -103,5 +118,6 @@ app.include_router(reports.router, tags=["Reports"])
 app.include_router(tracking.router, tags=["Tracking"])
 app.include_router(otp.router, tags=["OTP"])
 app.include_router(categories.router, tags=["Categories"])
-app.include_router(wishlist.router, tags=["Wishlist"])
 app.include_router(promotions.router, tags=["Promotions"])
+if blogs is not None:
+    app.include_router(blogs.router, tags=["Blogs"])

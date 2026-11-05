@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
 from sqlmodel import Session, select
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 
 # Internal Imports
 from database import get_session
-from models import HeroSlide, CreatorVideo, OrderReturn, ProductVariant, Inventory, AdminUser
+from models import HeroSlide, CreatorVideo, OrderReturn, ProductVariant, Inventory, AdminUser, Product
 from dependencies import oauth2_scheme, get_current_user, get_current_admin
 from supabase_utils import upload_file_to_supabase
 
@@ -40,41 +40,10 @@ async def upload_file(
 def manual_migration(current_user: AdminUser = Depends(get_current_admin)):
     """
     Manually trigger schema migrations. 
-    Useful if startup hooks failed or for production hot-fixing.
+    (Disabled: Migration files have been removed from the repository)
     """
-    results = []
-    try:
-        from migration_add_gender_collection import run_migration as run_gender_migration
-        from migrate_categories import create_category_table
-        from migrate_wishlist_schema import run_migration as run_wishlist_migration
-        
-        print("🔧 Triggering Manual Migrations...")
-        
-        # 1. Product Gender/Type Columns
-        try:
-            run_gender_migration()
-            results.append("Product Schema (Gender/Type): Success")
-        except Exception as e:
-            results.append(f"Product Schema Failed: {str(e)}")
-            
-        # 2. Categories Table
-        try:
-            create_category_table()
-            results.append("Category Table: Success")
-        except Exception as e:
-             results.append(f"Category Table Failed: {str(e)}")
+    return {"ok": False, "message": "Manual migrations are disabled because migration files are not present."}
 
-        # 3. Wishlist Schema
-        try:
-            run_wishlist_migration()
-            results.append("Wishlist Schema: Success")
-        except Exception as e:
-            results.append(f"Wishlist Schema Failed: {str(e)}")
-             
-        return {"ok": True, "results": results}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 # --- Hero Slides ---
 
@@ -373,7 +342,7 @@ def update_return_status(
     return_request.tracking_number = status_data.get("tracking_number")
     
     if status_data.get("status") in ["approved", "refunded", "rejected"]:
-        return_request.processed_at = datetime.utcnow()
+        return_request.processed_at = datetime.now(timezone.utc)
     
     session.add(return_request)
     session.commit()
@@ -394,16 +363,124 @@ def process_refund(
     
     if return_request.status != "approved":
         raise HTTPException(status_code=400, detail="Return must be approved first")
-    
-    # Update status to refunded
+
+    import re as _re
+    from models import Order, PaymentGateway
+    order = session.exec(select(Order).where(Order.order_id == return_request.order_id)).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    refund_note = "COD order - please refund the customer manually (UPI/bank transfer)."
+    gateway_refund_id = None
+    if (order.payment_method or "").lower() == "online":
+        # Find the Razorpay payment id saved in the order history ("Ref: pay_XXXX")
+        match = _re.search(r"(pay_[A-Za-z0-9]+)", order.status_history or "")
+        if match:
+            gw = session.exec(select(PaymentGateway).where(PaymentGateway.provider == "razorpay")).first()
+            if not gw:
+                raise HTTPException(status_code=500, detail="Razorpay gateway not configured")
+            try:
+                import razorpay
+                creds = json.loads(gw.credentials_json or "{}")
+                client = razorpay.Client(auth=(creds.get("key_id"), creds.get("key_secret")))
+                amount_paise = int(round((return_request.refund_amount or 0) * 100))
+                if amount_paise <= 0:
+                    raise HTTPException(status_code=400, detail="Refund amount is zero")
+                refund = client.payment.refund(match.group(1), {"amount": amount_paise})
+                gateway_refund_id = refund.get("id")
+                refund_note = f"Refunded via Razorpay (refund id {gateway_refund_id})"
+            except HTTPException:
+                raise
+            except Exception as e:
+                # Do NOT mark as refunded if the money was not sent back
+                raise HTTPException(status_code=502, detail=f"Razorpay refund failed: {e}")
+        elif _re.search(r"via\s+phonepe", order.status_history or "", _re.IGNORECASE):
+            # PhonePe Standard Checkout v2 refund API
+            import requests as _requests
+            import uuid as _uuid
+            from routes.orders import _phonepe_token
+            gw = session.exec(select(PaymentGateway).where(PaymentGateway.provider == "phonepe")).first()
+            if not gw:
+                raise HTTPException(status_code=500, detail="PhonePe gateway not configured")
+            creds = json.loads(gw.credentials_json or "{}")
+            amount_paise = int(round((return_request.refund_amount or 0) * 100))
+            if amount_paise < 100:
+                raise HTTPException(status_code=400, detail="PhonePe minimum refund is ₹1")
+            if (creds.get("environment") or "SANDBOX").upper() == "PRODUCTION":
+                refund_url = "https://api.phonepe.com/apis/pg/payments/v2/refund"
+            else:
+                refund_url = "https://api-preprod.phonepe.com/apis/pg-sandbox/payments/v2/refund"
+            merchant_refund_id = f"RF-{order.order_id}-{_uuid.uuid4().hex[:6]}"[:63]
+            try:
+                token = _phonepe_token(creds)
+                resp = _requests.post(
+                    refund_url,
+                    headers={"Content-Type": "application/json", "Authorization": f"O-Bearer {token}"},
+                    json={
+                        "merchantRefundId": merchant_refund_id,
+                        "originalMerchantOrderId": order.order_id,
+                        "amount": amount_paise,
+                    },
+                    timeout=30,
+                )
+                data = resp.json()
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"PhonePe refund failed: {e}")
+            state = (data.get("state") or "").upper()
+            if resp.status_code >= 400 or state not in ("PENDING", "COMPLETED"):
+                raise HTTPException(status_code=502, detail=f"PhonePe refund failed: {data.get('message') or data.get('code') or data}")
+            gateway_refund_id = data.get("refundId") or merchant_refund_id
+            refund_note = (f"Refund initiated via PhonePe (merchantRefundId {merchant_refund_id}, "
+                           f"refundId {data.get('refundId')}, state {state}). "
+                           f"Check status: GET /api/returns/{return_request.id}/refund-status")
+        else:
+            refund_note = "Online payment from an unknown gateway - please issue the refund from the gateway dashboard."
+
     return_request.status = "refunded"
-    return_request.processed_at = datetime.utcnow()
+    return_request.processed_at = datetime.now(timezone.utc)
+    return_request.admin_notes = ((return_request.admin_notes or "") + f"\n{refund_note}").strip()
     
     session.add(return_request)
     session.commit()
     
     return {
-        "message": "Refund processed successfully",
+        "message": refund_note,
         "refund_amount": return_request.refund_amount,
-        "order_id": return_request.order_id
+        "order_id": return_request.order_id,
+        "gateway_refund_id": gateway_refund_id,
     }
+
+
+@router.get("/api/returns/{return_id}/refund-status")
+def phonepe_refund_status(
+    return_id: int,
+    session: Session = Depends(get_session),
+    current_user: AdminUser = Depends(get_current_admin)
+):
+    """Check a PhonePe refund status (Admin only)."""
+    import re as _re
+    import requests as _requests
+    from models import PaymentGateway
+    from routes.orders import _phonepe_token
+    return_request = session.get(OrderReturn, return_id)
+    if not return_request:
+        raise HTTPException(status_code=404, detail="Return request not found")
+    match = _re.search(r"merchantRefundId (RF-[A-Za-z0-9\-]+)", return_request.admin_notes or "")
+    if not match:
+        raise HTTPException(status_code=404, detail="No PhonePe refund found for this return")
+    gw = session.exec(select(PaymentGateway).where(PaymentGateway.provider == "phonepe")).first()
+    if not gw:
+        raise HTTPException(status_code=500, detail="PhonePe gateway not configured")
+    creds = json.loads(gw.credentials_json or "{}")
+    base = ("https://api.phonepe.com/apis/pg" if (creds.get("environment") or "SANDBOX").upper() == "PRODUCTION"
+            else "https://api-preprod.phonepe.com/apis/pg-sandbox")
+    token = _phonepe_token(creds)
+    data = _requests.get(
+        f"{base}/payments/v2/refund/{match.group(1)}/status",
+        headers={"Content-Type": "application/json", "Authorization": f"O-Bearer {token}"},
+        timeout=30,
+    ).json()
+    return {"merchantRefundId": match.group(1), "state": data.get("state"), "amount": data.get("amount"),
+            "refundId": data.get("refundId"), "errorCode": data.get("errorCode")}

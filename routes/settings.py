@@ -6,7 +6,8 @@ import os
 # Internal Imports
 from database import get_session
 from models import StoreSettings, MetalRates
-from dependencies import oauth2_scheme
+from dependencies import get_current_admin
+from models import AdminUser
 
 router = APIRouter()
 
@@ -22,7 +23,7 @@ def get_store_settings(session: Session = Depends(get_session)):
     return settings
 
 @router.put("/api/settings")
-def update_store_settings(new_settings: StoreSettings, session: Session = Depends(get_session)):
+def update_store_settings(new_settings: StoreSettings, session: Session = Depends(get_session), current_user: AdminUser = Depends(get_current_admin)):
     settings = session.get(StoreSettings, 1)
     if not settings:
         settings = StoreSettings(id=1)
@@ -44,9 +45,11 @@ def get_live_metal_rates():
     Fetch live gold and silver rates from GoldAPI.io
     Returns rates in INR per 10g for gold and per 1kg for silver
     """
-    api_key = os.getenv("GOLDAPI_KEY", "goldapi-177n1tsmjdao3q4-io")
+    api_key = os.getenv("GOLDAPI_KEY")
     
     try:
+        if not api_key:
+            raise requests.exceptions.RequestException("GOLDAPI_KEY not configured")
         # Fetch Gold Rate (XAU in INR)
         gold_url = "https://www.goldapi.io/api/XAU/INR"
         headers = {
@@ -127,7 +130,8 @@ from models import MetalRates
 @router.post("/api/admin/metal-rates")
 def update_metal_rates(
     rate_data: MetalRates,
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    current_user: AdminUser = Depends(get_current_admin)
 ):
     """
     Manually update metal rates from Admin Panel
@@ -164,7 +168,7 @@ def get_flash_pincodes(session: Session = Depends(get_session)):
     return pincodes
 
 @router.post("/api/settings/flash-pincodes")
-def add_flash_pincode(data: FlashPincodeCreate, session: Session = Depends(get_session)):
+def add_flash_pincode(data: FlashPincodeCreate, session: Session = Depends(get_session), current_user: AdminUser = Depends(get_current_admin)):
     """Add a new Flash Delivery PIN code"""
     existing = session.exec(select(FlashPincode).where(FlashPincode.pincode == data.pincode)).first()
     if existing:
@@ -177,7 +181,7 @@ def add_flash_pincode(data: FlashPincodeCreate, session: Session = Depends(get_s
     return new_pin
 
 @router.delete("/api/settings/flash-pincodes/{pincode}")
-def delete_flash_pincode(pincode: str, session: Session = Depends(get_session)):
+def delete_flash_pincode(pincode: str, session: Session = Depends(get_session), current_user: AdminUser = Depends(get_current_admin)):
     """Delete a Flash Delivery PIN code"""
     existing = session.exec(select(FlashPincode).where(FlashPincode.pincode == pincode)).first()
     if not existing:
@@ -205,7 +209,7 @@ def get_active_blocked_regions(session: Session = Depends(get_session)):
     return [r.region_code for r in regions]
 
 @router.put("/api/settings/blocked-regions/{region_code}")
-def toggle_blocked_region(region_code: str, session: Session = Depends(get_session)):
+def toggle_blocked_region(region_code: str, session: Session = Depends(get_session), current_user: AdminUser = Depends(get_current_admin)):
     """Toggle the block status of a region"""
     region = session.exec(select(BlockedRegion).where(BlockedRegion.region_code == region_code)).first()
     if not region:
