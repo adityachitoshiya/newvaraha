@@ -1137,15 +1137,22 @@ async def razorpay_webhook(request: Request, session: Session = Depends(get_sess
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     event = json.loads(body or b"{}")
-    if event.get("event") not in ("payment.captured", "order.paid"):
+    if event.get("event") not in ("payment.captured", "order.paid", "payment.authorized", "payment.pending"):
         return {"status": "ignored"}
     payment = ((event.get("payload") or {}).get("payment") or {}).get("entity") or {}
-    rzp_order_id = payment.get("order_id")
+    rzp_order_id = payment.get("order_id") or (((event.get("payload") or {}).get("order") or {}).get("entity") or {}).get("id")
     if not rzp_order_id:
         return {"status": "ignored"}
     pending = session.get(PendingCheckout, rzp_order_id)
     if not pending:
         return {"status": "unknown_order"}
+    if pending.provider == "razorpay_magic":
+        # Amount can change inside Magic Checkout (coupon, COD fee): check it against Razorpay itself
+        from routes.magic_checkout import finalize_magic
+        order = finalize_magic(session, pending, None)
+        return {"status": "ok" if order else "not_paid", "orderId": order.order_id if order else None}
+    if event.get("event") not in ("payment.captured", "order.paid"):
+        return {"status": "ignored"}
     if int(payment.get("amount") or 0) != int(pending.amount_paise):
         print(f"🚨 Razorpay webhook AMOUNT MISMATCH {rzp_order_id}")
         return {"status": "amount_mismatch"}
