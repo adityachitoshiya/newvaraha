@@ -66,19 +66,43 @@ def _fail(code: str, reason: str) -> JSONResponse:
     return JSONResponse(status_code=400, content={"failure_code": code, "failure_reason": reason})
 
 
-async def _body(request: Request) -> dict:
+def _log_call(session: Session, request: Request, raw: bytes, status: str = ""):
+    """Keep the last 8 calls Razorpay made to our Magic Checkout URLs (to debug the setup)."""
     try:
-        data = await request.json()
+        from datetime import datetime
+        from models import SystemSetting
+        row = session.get(SystemSetting, "magic_debug") or SystemSetting(key="magic_debug", value="[]", description="Last Magic Checkout calls")
+        calls = json.loads(row.value or "[]")
+        calls.append({"t": datetime.utcnow().isoformat(), "m": request.method, "path": request.url.path,
+                      "ct": request.headers.get("content-type", ""), "ua": request.headers.get("user-agent", "")[:60],
+                      "body": raw.decode("utf-8", "ignore")[:600], "status": status})
+        row.value = json.dumps(calls[-8:])
+        session.add(row)
+        session.commit()
+    except Exception:
+        session.rollback()
+
+
+async def _body(request: Request) -> dict:
+    raw = b""
+    try:
+        raw = await request.body()
+        data = json.loads(raw or b"{}")
+        request.state.raw = raw
         return data if isinstance(data, dict) else {}
     except Exception:
+        request.state.raw = raw
         return {}
 
 
-@router.post("/api/magic/promotions")
+@router.api_route("/api/magic/promotions", methods=["GET", "POST"])
 async def get_promotions(request: Request, session: Session = Depends(get_session)):
     from coupon_rules import check_coupon_rules
     from fastapi import HTTPException
     body = await _body(request)
+    if request.method == "GET":
+        body = {**dict(request.query_params), **body}
+    _log_call(session, request, getattr(request.state, "raw", b"") or str(dict(request.query_params)).encode())
     pending = _cart(session, body)
     subtotal = pending.subtotal if pending else None
     out = []
@@ -100,6 +124,7 @@ async def apply_promotion(request: Request, session: Session = Depends(get_sessi
     from fastapi import HTTPException
     from routes.orders import compute_pricing
     body = await _body(request)
+    _log_call(session, request, getattr(request.state, "raw", b""))
     code = (body.get("code") or "").strip().upper()
     if not code:
         return _fail("INVALID_PROMOTION", "Please enter a coupon code")
@@ -181,6 +206,7 @@ async def shipping_info(request: Request, session: Session = Depends(get_session
     from routes.orders import COD_CHARGE, FREE_DELIVERY_MIN, ServiceabilityCheck, check_serviceability
     from models import BlockedRegion
     body = await _body(request)
+    _log_call(session, request, getattr(request.state, "raw", b""))
     pending = _cart(session, body)
     value = (pending.subtotal - (pending.coupon_discount or 0)) if pending else None
     cod_fee = 0 if (value is None or value >= FREE_DELIVERY_MIN) else int(round(COD_CHARGE * 100))
