@@ -53,12 +53,16 @@ def _cart(session: Session, body):
     """Our saved cart for a Magic Checkout call. Razorpay may send its order id or our receipt."""
     if not isinstance(body, dict):
         body = {"order_id": body}
-    for key in ("razorpay_order_id", "order_id"):
-        v = body.get(key)
-        if v:
-            row = session.get(PendingCheckout, str(v))
-            if row:
-                return row
+    for key in ("order_id", "razorpay_order_id"):
+        v = str(body.get(key) or "").strip()
+        if not v:
+            continue
+        # Razorpay sometimes sends its order id without the "order_" prefix
+        for cand in (v, f"order_{v}" if not v.startswith(("order_", "mc_", "rcpt_")) else None):
+            if cand:
+                row = session.get(PendingCheckout, cand)
+                if row:
+                    return row
     return None
 
 
