@@ -76,8 +76,8 @@ def _log_call(session: Session, request: Request, raw: bytes, status: str = ""):
         from datetime import datetime
         from models import SystemSetting
         ua = request.headers.get("user-agent", "")
-        if ua.lower().startswith(("curl", "python", "mozilla")):
-            return   # our own tests and browsers: keep only calls that come from Razorpay
+        if ua.lower().startswith("curl"):
+            return   # our own tests
         row = session.get(SystemSetting, "magic_debug") or SystemSetting(key="magic_debug", value="[]", description="Last Magic Checkout calls")
         calls = json.loads(row.value or "[]")
         calls.append({"t": datetime.utcnow().isoformat(), "m": request.method, "path": request.url.path,
