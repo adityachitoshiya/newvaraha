@@ -119,3 +119,46 @@ async def apply_promotion(request: Request, session: Session = Depends(get_sessi
         "value": int(round(discount * 100)), "value_type": "fixed_amount",
         "description": _summary(coupon),
     }}
+
+
+# ---------------------------------------------------------------------------
+# Admin on/off switch for Magic Checkout (off by default).
+# The storefront reads /api/magic/config to decide which checkout to show.
+# ---------------------------------------------------------------------------
+from datetime import datetime
+from pydantic import BaseModel
+from dependencies import get_current_admin
+from models import SystemSetting
+
+MAGIC_KEY = "magic_checkout_enabled"
+
+
+def magic_enabled(session: Session) -> bool:
+    row = session.get(SystemSetting, MAGIC_KEY)
+    return bool(row and str(row.value).lower() in ("1", "true", "on"))
+
+
+class MagicSettingReq(BaseModel):
+    enabled: bool
+
+
+@router.get("/api/magic/config")
+def magic_config(session: Session = Depends(get_session)):
+    return {"enabled": magic_enabled(session)}
+
+
+@router.get("/api/admin/magic-setting")
+def get_magic_setting(session: Session = Depends(get_session), current_user=Depends(get_current_admin)):
+    return {"enabled": magic_enabled(session)}
+
+
+@router.put("/api/admin/magic-setting")
+def set_magic_setting(body: MagicSettingReq, session: Session = Depends(get_session), current_user=Depends(get_current_admin)):
+    row = session.get(SystemSetting, MAGIC_KEY)
+    if row is None:
+        row = SystemSetting(key=MAGIC_KEY, value="0", description="Use Razorpay Magic Checkout")
+    row.value = "1" if body.enabled else "0"
+    row.updated_at = datetime.utcnow()
+    session.add(row)
+    session.commit()
+    return {"enabled": body.enabled}
