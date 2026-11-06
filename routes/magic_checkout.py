@@ -77,7 +77,9 @@ def magic_create_order(body: MagicCreateReq, token: Optional[str] = Depends(oaut
     for it in items:
         p = session.get(Product, it["productId"])
         offer = _paise(it["price"])
-        mrp = max(offer, _paise(p.mrp)) if p and p.mrp else offer
+        # Razorpay hides coupons for items already marked down (price above offer_price),
+        # so send the selling price for both: coupons then show in the Magic window.
+        mrp = offer
         line_items.append({
             "type": "e-commerce",
             "sku": str(it["productId"]),
