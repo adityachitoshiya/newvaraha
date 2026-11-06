@@ -75,12 +75,15 @@ def _log_call(session: Session, request: Request, raw: bytes, status: str = ""):
     try:
         from datetime import datetime
         from models import SystemSetting
+        ua = request.headers.get("user-agent", "")
+        if ua.lower().startswith(("curl", "python", "mozilla")):
+            return   # our own tests and browsers: keep only calls that come from Razorpay
         row = session.get(SystemSetting, "magic_debug") or SystemSetting(key="magic_debug", value="[]", description="Last Magic Checkout calls")
         calls = json.loads(row.value or "[]")
         calls.append({"t": datetime.utcnow().isoformat(), "m": request.method, "path": request.url.path,
                       "ct": request.headers.get("content-type", ""), "ua": request.headers.get("user-agent", "")[:60],
                       "body": raw.decode("utf-8", "ignore")[:600], "status": status})
-        row.value = json.dumps(calls[-8:])
+        row.value = json.dumps(calls[-30:])
         session.add(row)
         session.commit()
     except Exception:
