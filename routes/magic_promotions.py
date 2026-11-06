@@ -49,10 +49,17 @@ def _summary(c: Coupon) -> str:
     return s
 
 
-def _cart(session: Session, order_id: Optional[str]):
-    if not order_id:
-        return None
-    return session.get(PendingCheckout, order_id)
+def _cart(session: Session, body):
+    """Our saved cart for a Magic Checkout call. Razorpay may send its order id or our receipt."""
+    if not isinstance(body, dict):
+        body = {"order_id": body}
+    for key in ("razorpay_order_id", "order_id"):
+        v = body.get(key)
+        if v:
+            row = session.get(PendingCheckout, str(v))
+            if row:
+                return row
+    return None
 
 
 def _fail(code: str, reason: str) -> JSONResponse:
@@ -72,7 +79,7 @@ async def get_promotions(request: Request, session: Session = Depends(get_sessio
     from coupon_rules import check_coupon_rules
     from fastapi import HTTPException
     body = await _body(request)
-    pending = _cart(session, body.get("order_id"))
+    pending = _cart(session, body)
     subtotal = pending.subtotal if pending else None
     out = []
     for c in session.exec(select(Coupon).where(Coupon.is_active == True)).all():  # noqa: E712
@@ -99,7 +106,7 @@ async def apply_promotion(request: Request, session: Session = Depends(get_sessi
     coupon = session.exec(select(Coupon).where(Coupon.code == code)).first()
     if not coupon or not coupon.is_active:
         return _fail("INVALID_PROMOTION", "This coupon code is not valid")
-    pending = _cart(session, body.get("order_id"))
+    pending = _cart(session, body)
     if not pending:
         return _fail("INVALID_PROMOTION", "We could not find your cart. Please try again.")
     try:
@@ -162,3 +169,47 @@ def set_magic_setting(body: MagicSettingReq, session: Session = Depends(get_sess
     session.add(row)
     session.commit()
     return {"enabled": body.enabled}
+
+
+# ---------------------------------------------------------------------------
+# Shipping info: Razorpay asks, for each address the shopper picks, whether we
+# deliver there and what delivery / COD cost. Delivery is free; COD costs the
+# store's COD fee only on small orders (same rule as the normal checkout).
+# ---------------------------------------------------------------------------
+@router.post("/api/magic/shipping")
+async def shipping_info(request: Request, session: Session = Depends(get_session)):
+    from routes.orders import COD_CHARGE, FREE_DELIVERY_MIN, ServiceabilityCheck, check_serviceability
+    from models import BlockedRegion
+    body = await _body(request)
+    pending = _cart(session, body)
+    value = (pending.subtotal - (pending.coupon_discount or 0)) if pending else None
+    cod_fee = 0 if (value is None or value >= FREE_DELIVERY_MIN) else int(round(COD_CHARGE * 100))
+    blocked = {r.region_code.upper() for r in session.exec(select(BlockedRegion).where(BlockedRegion.is_blocked == True)).all()}  # noqa: E712
+
+    out = []
+    for a in (body.get("addresses") or []):
+        if not isinstance(a, dict):
+            continue
+        zipcode = str(a.get("zipcode") or "").strip()
+        state = str(a.get("state_code") or "").strip().upper()
+        country = str(a.get("country") or "IN").strip().upper()
+        serviceable, cod_ok, eta = False, False, None
+        if country == "IN" and len(zipcode) == 6 and zipcode.isdigit() and state not in blocked:
+            try:
+                r = check_serviceability(ServiceabilityCheck(delivery_pincode=zipcode, mode="COD", value=value or 1000.0), session)
+                serviceable, cod_ok, eta = bool(r.get("available")), bool(r.get("cod", True)), r.get("date")
+            except Exception:
+                serviceable, cod_ok = True, True   # do not lose an order if the courier lookup is down
+        out.append({
+            "id": a.get("id"), "zipcode": zipcode, "state_code": a.get("state_code"), "country": a.get("country"),
+            "shipping_methods": [{
+                "id": "1",
+                "name": "Standard delivery",
+                "description": f"Delivery by {eta}" if eta else "Delivery in 3 to 7 days",
+                "serviceable": serviceable,
+                "shipping_fee": 0,
+                "cod": bool(serviceable and cod_ok),
+                "cod_fee": cod_fee if (serviceable and cod_ok) else 0,
+            }],
+        })
+    return {"addresses": out}

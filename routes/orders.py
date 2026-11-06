@@ -852,10 +852,11 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
             notes = {"email": cust["email"], "phone": cust["contact"]}
             if ident.get("supabase_uid"):
                 notes["user_id"] = ident["supabase_uid"]
+            receipt = f"rcpt_{int(time.time())}_{_short_id()}"
             razorpay_order = client.order.create(data={
                 "amount": amount_paise,
                 "currency": "INR",
-                "receipt": f"rcpt_{int(time.time())}_{_short_id()}",
+                "receipt": receipt,
                 "notes": notes,
             })
         except Exception as e:
@@ -863,6 +864,7 @@ def create_checkout_session(order_data: OrderCreate, token: Optional[str] = Depe
             raise HTTPException(status_code=500, detail=f"Gateway Error: {str(e)}")
 
         save_pending(razorpay_order["id"])
+        save_pending(receipt)  # Magic Checkout's URLs may send the receipt instead of the order id
         return {
             "id": razorpay_order['id'],
             "orderId": razorpay_order['id'],
