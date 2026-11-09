@@ -13,6 +13,8 @@ import os
 from database import get_session
 from models import Order
 from rapidshyp_utils import rapidshyp_client
+from datetime import timedelta as _td
+_IST = _td(hours=5, minutes=30)
 from dependencies import oauth2_scheme
 
 router = APIRouter()
@@ -316,7 +318,7 @@ def get_estimated_delivery(order) -> Optional[str]:
     if not order.created_at:
         return None
     from datetime import timedelta
-    est = order.created_at + timedelta(days=5)
+    est = order.created_at + _IST + timedelta(days=5)
     return est.strftime("%d %b %Y")
 
 def get_steps_info(order) -> list:
@@ -330,7 +332,7 @@ def get_steps_info(order) -> list:
             "description": "Order confirmed",
             "completed": current_step >= 1,
             "active": current_step == 1,
-            "date": order.created_at.strftime("%d %b, %I:%M %p") if order.created_at else None
+            "date": (order.created_at + _IST).strftime("%d %b, %I:%M %p") if order.created_at else None  # stored in UTC, shown in India time
         },
         {
             "step": 2,
