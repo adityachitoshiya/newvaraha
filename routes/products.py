@@ -104,6 +104,8 @@ class ReviewCreate(BaseModel):
     rating: int
     comment: str
     media_urls: List[str] = []
+    order_id: Optional[str] = None   # customers review from their order page
+    key: Optional[str] = None        # the order's access key (from the order link)
 
 
 @router.get("/api/products", response_model=List[Product])
@@ -269,7 +271,21 @@ def toggle_spotlight(product_id: str, current_user: AdminUser = Depends(get_curr
 # --- Review Routes ---
 
 @router.post("/api/reviews", response_model=Dict)
-def create_review(review_data: ReviewCreate, session: Session = Depends(get_session)):
+def create_review(review_data: ReviewCreate, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
+    # Only admins, or a customer reviewing a product from their own order
+    from order_access import resolve_identity, identity_owns_order, verify_order_access_key
+    from models import Order
+    ident = resolve_identity(token, session)
+    if not ident.get("is_admin"):
+        order = session.exec(select(Order).where(Order.order_id == review_data.order_id)).first() if review_data.order_id else None
+        if not order or not (verify_order_access_key(order.order_id, review_data.key) or identity_owns_order(ident, order)):
+            raise HTTPException(status_code=401, detail="Please write your review from your order page")
+        try:
+            in_order = {str(i.get("productId") or i.get("id") or i.get("product_id")) for i in json.loads(order.items_json or "[]")}
+        except Exception:
+            in_order = set()
+        if str(review_data.product_id) not in in_order:
+            raise HTTPException(status_code=400, detail="This product is not in your order")
     # Basic validation (rating outside 1-5 would corrupt the product's average)
     if review_data.rating < 1 or review_data.rating > 5:
         raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")

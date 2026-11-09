@@ -597,3 +597,73 @@ def sync_user(user_data: UserSync, token: str = Depends(oauth2_scheme), session:
 # NOTE: /api/auth/social-login was removed - it issued a login token for ANY
 # email without verification (account takeover). Use /api/auth/google or
 # /api/auth/firebase instead.
+
+
+# ============================================
+# FORGOT / RESET PASSWORD (email + password customers)
+# The link holds a signed token that is valid 1 hour and only until the
+# password changes (it carries a fingerprint of the current password hash).
+# ============================================
+import hashlib as _hashlib
+from fastapi import Request as _Request
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+def _pw_fingerprint(hashed: str) -> str:
+    return _hashlib.sha256((hashed or "").encode()).hexdigest()[:16]
+
+
+@router.post("/api/auth/forgot-password")
+def forgot_password(payload: ForgotPasswordRequest, request: _Request, session: Session = Depends(get_session)):
+    from sqlalchemy import func as _func
+    from routes.tracking import _throttle
+    email = (payload.email or "").strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="Please enter a valid email")
+    fwd = request.headers.get("x-forwarded-for", "")
+    ip = (fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "")) or "unknown"
+    _throttle(session, f"reset-ip:{ip}", 10, "Too many tries. Please wait a while and try again.")
+    _throttle(session, f"reset-mail:{email}", 3, "We already sent a few links. Please check your inbox (and spam) or try later.")
+    session.commit()
+
+    customer = session.exec(select(Customer).where(_func.lower(Customer.email) == email)).first()
+    if customer and customer.hashed_password:
+        token = create_access_token(
+            data={"sub": customer.email, "purpose": "pw_reset", "fp": _pw_fingerprint(customer.hashed_password)},
+            expires_delta=timedelta(minutes=60),
+        )
+        site = os.getenv("FRONTEND_URL", "https://varahajewels.in").rstrip("/")
+        from notifications import send_password_reset_email
+        send_password_reset_email(customer.email, customer.full_name, f"{site}/reset-password?token={token}")
+    # Same answer either way, so nobody can find out which emails have accounts
+    return {"ok": True, "message": "If this email has an account, a reset link is on its way."}
+
+
+@router.post("/api/auth/reset-password")
+def reset_password(payload: ResetPasswordRequest, session: Session = Depends(get_session)):
+    from jose import jwt as _jwt, JWTError
+    from auth_utils import SECRET_KEY, ALGORITHM, get_password_hash
+    if len(payload.new_password or "") < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    bad = HTTPException(status_code=400, detail="This reset link is invalid or has expired. Please request a new one.")
+    try:
+        data = _jwt.decode(payload.token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        raise bad
+    if data.get("purpose") != "pw_reset" or not data.get("sub"):
+        raise bad
+    customer = session.exec(select(Customer).where(Customer.email == data["sub"])).first()
+    if not customer or not customer.hashed_password or _pw_fingerprint(customer.hashed_password) != data.get("fp"):
+        raise bad   # unknown account, or the link was already used
+    customer.hashed_password = get_password_hash(payload.new_password)
+    session.add(customer)
+    session.commit()
+    return {"ok": True, "message": "Password updated. Please log in with your new password."}

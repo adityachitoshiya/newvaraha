@@ -256,7 +256,7 @@ def validate_coupon_server_side(coupon_code: str, subtotal: float, session: Sess
         coupon = session.exec(select(Coupon).where(Coupon.code == coupon_code.strip())).first()
 
     if not coupon or not coupon.is_active:
-        return 0.0
+        raise HTTPException(status_code=400, detail=f"Coupon {coupon_code.strip().upper()} is not valid. Please remove it and try again.")
 
     # Enforce the coupon's own payment-method restriction
     restriction = (getattr(coupon, "payment_method_restriction", None) or "none").lower()
@@ -274,8 +274,7 @@ def validate_coupon_server_side(coupon_code: str, subtotal: float, session: Sess
     # Check minimum order amount (if set on coupon)
     min_order = getattr(coupon, 'min_order_amount', None)
     if min_order and subtotal < min_order:
-        print(f"⚠️ Coupon {coupon.code}: subtotal ₹{subtotal} < min_order ₹{min_order}. Rejecting.")
-        return 0.0
+        raise HTTPException(status_code=400, detail=f"Coupon {coupon.code} needs an order of at least ₹{min_order:,.0f}")
 
     discount = 0.0
     if coupon.discount_type == "percentage":

@@ -13,6 +13,7 @@ import os
 from database import get_session
 from models import Order
 from rapidshyp_utils import rapidshyp_client
+from dependencies import oauth2_scheme
 
 router = APIRouter()
 
@@ -263,14 +264,16 @@ def public_track_order(order_id: str, token: str, session: Session = Depends(get
     }
 
 @router.get("/api/orders/{order_id}/refresh-tracking")
-def refresh_tracking(order_id: str, session: Session = Depends(get_session)):
+def refresh_tracking(order_id: str, key: Optional[str] = None, token: Optional[str] = Depends(oauth2_scheme), session: Session = Depends(get_session)):
     """
     Manually fetch latest tracking from RapidShyp API.
-    Fallback when webhook is delayed.
+    Fallback when webhook is delayed. Only the order's owner (login or order link) or an admin.
     """
+    from order_access import resolve_identity, identity_owns_order, verify_order_access_key
     order = session.exec(select(Order).where(Order.order_id == order_id)).first()
-    
-    if not order or not order.awb_number:
+    if not order or not (verify_order_access_key(order.order_id, key) or identity_owns_order(resolve_identity(token, session), order)):
+        raise HTTPException(status_code=404, detail="Order or AWB not found")
+    if not order.awb_number:
         raise HTTPException(status_code=404, detail="Order or AWB not found")
     
     # Call RapidShyp API

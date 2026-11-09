@@ -794,3 +794,37 @@ def send_tracking_notification(order, status: str):
     except Exception as e:
         logger.error(f"Failed to send tracking notification ({status}): {str(e)}")
 
+
+
+def send_password_reset_email(to_email: str, name: str, link: str) -> bool:
+    """Email a password reset link to a customer (Resend). Returns True when sent."""
+    try:
+        sender_email = os.getenv("EMAIL_USER") or os.getenv("EMAIL_SENDER") or ""
+        sender_alias = os.getenv("EMAIL_FROM", sender_email) or ""
+        api_key = os.getenv("RESEND_API_KEY")
+        if not api_key or not real_email(to_email):
+            logger.warning("Password reset email skipped: Resend key missing or no real email")
+            return False
+        first = html.escape((name or "").strip().split(" ")[0] or "there")
+        body_html = f"""
+        <div style="font-family: Helvetica, Arial, sans-serif; background:#f4f1ea; padding:24px;">
+          <div style="max-width:560px; margin:0 auto; background:#fff; border:1px solid #e0d8c3; padding:36px; text-align:center;">
+            <img src="https://res.cloudinary.com/dd5zrsmok/image/upload/v1766342264/logo_hvef6t.png" width="140" alt="Varaha Jewels">
+            <h2 style="font-family: Georgia, serif; color:#1a1a1a;">Reset your password</h2>
+            <p style="color:#555; line-height:1.6;">Hi {first}, we got a request to reset the password of your Varaha Jewels account.
+            The button below works once and for 1 hour.</p>
+            <a href="{link}" style="background:#1a1a1a; color:#c5a059; padding:14px 28px; text-decoration:none; display:inline-block; margin:18px 0; letter-spacing:1px;">Set a new password</a>
+            <p style="color:#999; font-size:12px;">If you did not ask for this, you can ignore this email. Your password stays the same.</p>
+          </div>
+        </div>"""
+        resend.api_key = api_key
+        resend.Emails.send({
+            "from": f"Varaha Jewels <{sender_alias}>" if "@" in sender_alias else "onboarding@resend.dev",
+            "to": [to_email],
+            "subject": "Reset your Varaha Jewels password",
+            "html": body_html,
+        })
+        return True
+    except Exception as e:
+        logger.error(f"Password reset email failed: {e}")
+        return False
