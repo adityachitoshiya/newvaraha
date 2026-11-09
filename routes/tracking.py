@@ -375,3 +375,83 @@ def get_steps_info(order) -> list:
 
 
 # =====================================
+
+# ============================================
+# ORDER LOOKUP FOR THE "TRACK ORDER" PAGE (no login)
+# The customer enters the phone or email used on the order.
+# This was dropped in the security clean-up, which left the page answering "Not found"
+# for every number. It is back with limits: few tries per visitor, and only
+# information the public tracking link already shows (no address, no email, first name only).
+# ============================================
+from pydantic import BaseModel
+from sqlalchemy import func
+from datetime import timedelta
+
+
+class TrackLookupRequest(BaseModel):
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
+LOOKUP_PER_IP_PER_HOUR = 15
+LOOKUP_PER_KEY_PER_HOUR = 8     # the same phone / email asked again and again
+
+
+def _throttle(session: Session, key: str, limit: int, detail: str):
+    from routes.phone_otp import PhoneOtpLog   # small table we already use for rate limits
+    since = datetime.utcnow() - timedelta(hours=1)
+    n = session.exec(select(func.count()).select_from(PhoneOtpLog).where(PhoneOtpLog.phone == key, PhoneOtpLog.created_at > since)).one()
+    if n >= limit:
+        raise HTTPException(status_code=429, detail=detail)
+    session.add(PhoneOtpLog(phone=key))
+
+
+@router.post("/api/track/lookup")
+def lookup_orders_for_tracking(payload: TrackLookupRequest, request: Request, session: Session = Depends(get_session)):
+    import re
+    email = (payload.email or "").strip().lower()
+    digits = re.sub(r"\D", "", payload.phone or "")
+    phone = digits[-10:] if len(digits) >= 10 else ""
+    if not email and not phone:
+        raise HTTPException(status_code=400, detail="Please enter the email or the 10 digit phone number used on your order")
+
+    fwd = request.headers.get("x-forwarded-for", "")
+    ip = (fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "")) or "unknown"
+    _throttle(session, f"track-ip:{ip}", LOOKUP_PER_IP_PER_HOUR, "Too many tries. Please wait a while and try again.")
+    _throttle(session, f"track-key:{email or phone}", LOOKUP_PER_KEY_PER_HOUR, "Too many tries for this number. Please wait a while and try again.")
+    session.commit()
+
+    conds = []
+    if email:
+        conds.append(func.lower(Order.email) == email)
+    if phone:
+        conds.append(Order.phone.like(f"%{phone}"))   # stored as 98xxxxxxxx, +9198xxxxxxxx or 09...
+    cond = conds[0] if len(conds) == 1 else (conds[0] | conds[1])
+    orders = session.exec(select(Order).where(cond).order_by(Order.created_at.desc()).limit(10)).all()  # type: ignore
+
+    if not orders:
+        raise HTTPException(status_code=404, detail="No orders found. Please check the phone number or email you used while ordering.")
+
+    result = []
+    for order in orders:
+        try:
+            items = json.loads(order.items_json or "[]")
+        except Exception:
+            items = []
+        token = generate_tracking_token(order.order_id)
+        result.append({
+            "order_id": order.order_id,
+            "status": order.status,
+            "total_amount": order.total_amount,
+            "payment_method": order.payment_method,
+            "created_at": order.created_at.isoformat() if order.created_at else None,
+            "customer_name": (order.customer_name or "").split(" ")[0],
+            "product_names": [i.get("productName", i.get("name", "Product")) for i in items],
+            "item_count": len(items),
+            "awb_number": order.awb_number,
+            "courier_name": order.courier_name,
+            "current_step": get_tracking_step(order.status),
+            "tracking_url": f"/track/{order.order_id}_{token}",
+            "steps": get_steps_info(order),
+        })
+    return {"orders": result, "count": len(result)}
