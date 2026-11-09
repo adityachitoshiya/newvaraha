@@ -26,6 +26,15 @@ from database import engine
 from sqlmodel import Session, select
 from models import Order
 
+def real_email(value):
+    """Razorpay Magic Checkout puts void@razorpay.com when the shopper gives no email.
+    That is not a customer address: treat it as 'no email'."""
+    v = (value or "").strip().lower()
+    if not v or v.endswith("@razorpay.com") or v.startswith("void@"):
+        return None
+    return (value or "").strip()
+
+
 def send_order_notifications(order_data_or_id):
     """
     Triggers email and Telegram notifications when a new order is received.
@@ -115,7 +124,7 @@ def send_order_notifications(order_data_or_id):
         msg_admin.attach(MIMEText(body_admin, 'html'))
 
         # Customer Email Content
-        customer_email = order_data.get('email')
+        customer_email = real_email(order_data.get('email'))
         msg_customer = None
         
         if customer_email:
@@ -527,6 +536,25 @@ def send_order_notifications(order_data_or_id):
     except Exception as e:
         logger.error(f"Failed to send Telegram notification: {str(e)}")
 
+    # --- 3. No real customer email: say so on the order (instead of a false "sent") ---
+    try:
+        if not real_email(order_data.get('email')) and order_data.get('order_id'):
+            with Session(engine) as session:
+                rec = session.exec(select(Order).where(Order.order_id == order_data.get('order_id'))).first()
+                if rec:
+                    rec.email_status = "no_email"
+                    session.add(rec)
+                    session.commit()
+    except Exception as e:
+        logger.error(f"Could not mark order as having no email: {e}")
+
+    # --- 4. WhatsApp confirmation (only when the Meta variables are set) ---
+    try:
+        from whatsapp import send_order_confirmation
+        send_order_confirmation(order_data)
+    except Exception as e:
+        logger.error(f"WhatsApp confirmation error: {e}")
+
 def send_telegram_alert(message: str, parse_mode: str = "HTML"):
     """
     Sends a general text alert to the configured Telegram chat.
@@ -563,7 +591,7 @@ def send_shipping_notifications(order_data):
         email_provider = os.getenv("EMAIL_PROVIDER", "smtp").lower()
         resend_api_key = os.getenv("RESEND_API_KEY")
         
-        customer_email = order_data.get('email')
+        customer_email = real_email(order_data.get('email'))
         if not customer_email:
             logger.warning("No customer email found for shipping notification")
             return
@@ -650,7 +678,7 @@ def send_tracking_notification(order, status: str):
         email_provider = os.getenv("EMAIL_PROVIDER", "resend").lower()
         frontend_url = os.getenv("FRONTEND_URL", "https://varahajewels.in")
         
-        customer_email = order.email
+        customer_email = real_email(order.email)
         if not customer_email:
             logger.warning(f"No email for order {order.order_id} - skipping notification")
             return
