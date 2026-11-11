@@ -379,7 +379,8 @@ def google_oauth_auth(
     )
 
 
-ADMIN_OTP_MAX_ATTEMPTS = 5
+ADMIN_OTP_MAX_ATTEMPTS = 3   # 4 digit code, so fewer guesses (valid 5 minutes)
+ADMIN_OTP_DIGITS = 4
 
 
 def _admin_otp_key(username: str) -> str:
@@ -430,7 +431,7 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), ses
     # 2FA Logic - stored in DB so it works across multiple server workers
     import secrets as _secrets
     from models import VerificationCode
-    otp = "".join(_secrets.choice("0123456789") for _ in range(6))
+    otp = "".join(_secrets.choice("0123456789") for _ in range(ADMIN_OTP_DIGITS))
     expiration = datetime.utcnow() + timedelta(minutes=5)
 
     key = _admin_otp_key(user.username)
