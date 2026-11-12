@@ -62,9 +62,8 @@ def _send_whatsapp(phone: str, code: str):
             {"type": "button", "sub_type": "url", "index": "0", "parameters": [{"type": "text", "text": code}]},
         ]}}
     try:
-        r = requests.post(f"{GRAPH}/{os.getenv('META_WA_PHONE_ID')}/messages",
-                          headers={"Authorization": f"Bearer {os.getenv('META_WA_TOKEN')}"}, json=body, timeout=15)
-        data = r.json() if r.content else {}
+        from whatsapp import _post   # main number first, backup number if it fails
+        r, data = _post(body)
     except Exception:
         raise HTTPException(status_code=502, detail="Could not send the WhatsApp OTP. Please try again.")
     if not (r.ok and data.get("messages")):

@@ -2,7 +2,8 @@
 
 Switched on by environment variables (nothing is sent until they are set):
   META_WA_TOKEN      permanent token of a System User   (secret - only in Render)
-  META_WA_PHONE_ID   the WhatsApp number's Phone number ID
+  META_WA_PHONE_ID   the main WhatsApp number's Phone number ID (every message goes from here first)
+  META_WA_PHONE_ID_FALLBACK  backup number's Phone number ID: used only if the main number fails
   META_WA_TEMPLATE   plain Utility template name         (default: order_confirmation)
   META_WA_PHOTO_TEMPLATE  template with the product photo (default: order_confirmation_photo,
                           set it empty to never use it)
@@ -88,13 +89,38 @@ def _product_photo(order_data: dict) -> str:
         return ""
 
 
-def _post(body: dict):
+def _send_from(phone_id: str, body: dict):
     r = requests.post(
-        f"{GRAPH}/{os.getenv('META_WA_PHONE_ID')}/messages",
+        f"{GRAPH}/{phone_id}/messages",
         headers={"Authorization": f"Bearer {os.getenv('META_WA_TOKEN')}", "Content-Type": "application/json"},
         json=body, timeout=15,
     )
     return r, (r.json() if r.content else {})
+
+
+def _post(body: dict):
+    """Send from the main number; if that fails, try the backup number once.
+    A message that failed was not delivered, so the retry cannot create a duplicate."""
+    main = os.getenv("META_WA_PHONE_ID")
+    backup = (os.getenv("META_WA_PHONE_ID_FALLBACK") or "").strip()
+    try:
+        r, data = _send_from(main, body)
+        if r.ok and data.get("messages"):
+            return r, data
+        first_error = data
+    except Exception as e:
+        r, data, first_error = None, {}, {"error": {"message": str(e)[:120]}}
+    if backup and backup != main:
+        try:
+            r2, d2 = _send_from(backup, body)
+            if r2.ok and d2.get("messages"):
+                logger.warning(f"WhatsApp: main number failed ({(first_error.get('error') or {}).get('message')}), sent from the backup number")
+                return r2, d2
+        except Exception as e:
+            logger.error(f"WhatsApp backup number also failed: {e}")
+    if r is None:
+        raise requests.RequestException("WhatsApp request failed")
+    return r, data
 
 
 def send_order_confirmation(order_data: dict):
