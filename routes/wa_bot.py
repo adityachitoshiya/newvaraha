@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -65,6 +66,31 @@ class WaMessage(SQLModel, table=True):
     text: str = ""
     wa_id: Optional[str] = Field(default=None, index=True, unique=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class WaWebhookStatus(SQLModel, table=True):
+    """One row (id=1): what the webhook last saw, shown in Admin > WhatsApp Inbox."""
+    id: int = Field(default=1, primary_key=True)
+    last_call_at: Optional[datetime] = None       # any call that passed the signature check
+    last_message_at: Optional[datetime] = None    # last customer message saved
+    last_bad_sig_at: Optional[datetime] = None    # call rejected: signature did not match META_APP_SECRET
+    last_error: Optional[str] = None
+    last_error_at: Optional[datetime] = None
+
+
+def _status(**fields):
+    try:
+        with Session(engine) as s:
+            row = s.get(WaWebhookStatus, 1) or WaWebhookStatus(id=1)
+            for k, v in fields.items():
+                setattr(row, k, v)
+            s.add(row)
+            s.commit()
+    except Exception as e:
+        logger.error(f"WhatsApp webhook status save failed: {e}")
+
+
+_reply_pid: ContextVar[Optional[str]] = ContextVar("wa_reply_pid", default=None)
 
 
 # ---------------------------------------------------------------- texts
@@ -135,7 +161,8 @@ def status_label(st, lang):
 
 # ---------------------------------------------------------------- sending
 def _send(phone: str, payload: dict, log_text: str, session: Session, sender: str = "bot") -> bool:
-    tok, pid = os.getenv("META_WA_TOKEN"), os.getenv("META_WA_PHONE_ID")
+    # Reply from the number the customer wrote to (set by the webhook), else the main number
+    tok, pid = os.getenv("META_WA_TOKEN"), _reply_pid.get() or os.getenv("META_WA_PHONE_ID")
     ok, wa_id = False, None
     if tok and pid:
         try:
@@ -145,7 +172,9 @@ def _send(phone: str, payload: dict, log_text: str, session: Session, sender: st
             ok = r.ok and bool(data.get("messages"))
             wa_id = (data.get("messages") or [{}])[0].get("id") if ok else None
             if not ok:
-                logger.error(f"WhatsApp bot send failed: {r.status_code} {(data.get('error') or {}).get('message')}")
+                err = f"Send failed {r.status_code}: {(data.get('error') or {}).get('message')}"
+                logger.error(f"WhatsApp bot {err}")
+                _status(last_error=err[:300], last_error_at=datetime.utcnow())
         except Exception as e:
             logger.error(f"WhatsApp bot send error: {e}")
     session.add(WaMessage(phone=phone, direction="out", sender=sender, wa_id=wa_id,
@@ -415,12 +444,18 @@ def verify_webhook(request: Request):
 
 
 def _process(body: dict):
-    my_pid = os.getenv("META_WA_PHONE_ID")
+    # Only Meta can reach here (signature checked), and Meta only sends events of our own
+    # WhatsApp accounts, so any of our numbers is answered from that same number.
+    _status(last_call_at=datetime.utcnow())
     for entry in body.get("entry") or []:
         for ch in entry.get("changes") or []:
-            v = ch.get("value") or {}
-            if (v.get("metadata") or {}).get("phone_number_id") != my_pid:
+            if ch.get("field") not in (None, "messages"):
                 continue
+            v = ch.get("value") or {}
+            pid = (v.get("metadata") or {}).get("phone_number_id") or ""
+            if not re.fullmatch(r"\d{6,25}", pid):
+                continue
+            _reply_pid.set(pid)
             names = {c.get("wa_id"): (c.get("profile") or {}).get("name") for c in v.get("contacts") or []}
             for m in v.get("messages") or []:
                 phone, kind, wid = m.get("from") or "", m.get("type") or "", m.get("id")
@@ -447,22 +482,30 @@ def _process(body: dict):
                     except Exception:
                         s.rollback()
                         continue  # another worker took it
+                    _status(last_message_at=datetime.utcnow())
                     try:
                         handle(phone, names.get(phone) or "", kind, text, rid, s)
                     except Exception as e:
                         logger.error(f"WhatsApp bot error for {phone[-4:]}: {e}")
+                        _status(last_error=f"Bot error: {e}"[:300], last_error_at=datetime.utcnow())
 
 
 @router.post("/api/whatsapp/webhook")
 async def receive_webhook(request: Request, background: BackgroundTasks):
     raw = await request.body()
-    secret = os.getenv("META_APP_SECRET")
+    secret = (os.getenv("META_APP_SECRET") or "").strip()
     sig = request.headers.get("X-Hub-Signature-256", "")
     if not secret:
         logger.error("WhatsApp webhook: META_APP_SECRET is not set - ignoring call")
         raise HTTPException(status_code=503, detail="Not configured")
     good = "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, good):
+        if sig.startswith("sha256="):  # looks like Meta, so the saved app secret is probably wrong
+            with Session(engine) as s:
+                row = s.get(WaWebhookStatus, 1)
+            last = row.last_bad_sig_at if row else None
+            if not last or datetime.utcnow() - last > timedelta(minutes=1):
+                _status(last_bad_sig_at=datetime.utcnow())
         raise HTTPException(status_code=403, detail="Bad signature")
     try:
         body = json.loads(raw or b"{}")
@@ -530,6 +573,16 @@ def chat_reply(phone: str, body: ReplyIn, session: Session = Depends(get_session
     if not send_text(phone, text, session, sender="team"):
         raise HTTPException(status_code=502, detail="WhatsApp did not accept the message")
     return {"ok": True}
+
+
+@router.get("/api/admin/wa/status")
+def webhook_status(session: Session = Depends(get_session), admin=Depends(get_current_admin)):
+    row = session.get(WaWebhookStatus, 1)
+    return {"configured": bool(os.getenv("META_APP_SECRET") and os.getenv("META_WA_VERIFY_TOKEN") and os.getenv("META_WA_TOKEN")),
+            "phone_id_end": (os.getenv("META_WA_PHONE_ID") or "")[-4:],
+            "last_call_at": row.last_call_at if row else None, "last_message_at": row.last_message_at if row else None,
+            "last_bad_sig_at": row.last_bad_sig_at if row else None,
+            "last_error": row.last_error if row else None, "last_error_at": row.last_error_at if row else None}
 
 
 @router.post("/api/admin/wa/chats/{phone}/mode")
